@@ -1,120 +1,27 @@
-import { NextRequest, NextResponse } from 'next/server';
+// src/app/api/admin/approve/[workflowId]/route.ts
+import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { validateTransition } from '@/lib/stateMachine';
-import { writeAuditLog } from '@/lib/auditLog';
+import { runAgentLoop } from '@/lib/orchestra';
 
 export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  req: Request,
+  { params }: { params: { workflowId: string } }
 ) {
+  const { workflowId } = params;
+
   try {
-    const { decision, decidedBy, reason } = await request.json();
-
-    if (decision !== 'APPROVED' && decision !== 'REJECTED') {
-      return NextResponse.json(
-        { error: 'Invalid decision. Must be APPROVED or REJECTED' },
-        { status: 400 }
-      );
-    }
-
-    if (!decidedBy) {
-      return NextResponse.json(
-        { error: 'decidedBy is required' },
-        { status: 400 }
-      );
-    }
-
-    const { id: approvalId } = await params;
-
-    const approval = await prisma.approval.findUnique({
-      where: { id: approvalId },
-      include: {
-        workflow: true,
-      },
+    // 1. Update the state to transition out of PENDING_APPROVAL
+    const updatedWorkflow = await prisma.workflow.update({
+      where: { id: workflowId },
+      data: { state: 'WRITING_ERP' },
     });
 
-    if (!approval) {
-      return NextResponse.json(
-        { error: 'Approval not found' },
-        { status: 404 }
-      );
-    }
+    // 2. Trigger the orchestrator to resume the loop
+    // This forces the agent to realize the state has changed and trigger the erp_agent
+    await runAgentLoop(workflowId);
 
-    if (approval.decision !== 'PENDING') {
-      return NextResponse.json(
-        { error: 'Approval has already been decided' },
-        { status: 400 }
-      );
-    }
-
-    const updatedApproval = await prisma.approval.update({
-      where: { id: approvalId },
-      data: {
-        decision,
-        decidedBy,
-        reason,
-        decidedAt: new Date(),
-      },
-    });
-
-    if (decision === 'APPROVED') {
-      const currentState = approval.workflow.state;
-      const targetState = 'WRITING_ERP';
-
-      validateTransition(currentState, targetState);
-
-      await prisma.workflow.update({
-        where: { id: approval.workflowId },
-        data: {
-          state: targetState,
-        },
-      });
-
-      await writeAuditLog({
-        workflowId: approval.workflowId,
-        actor: 'human',
-        action: 'approval_approved',
-        fromState: currentState,
-        toState: targetState,
-        metadata: {
-          approvalId,
-          decidedBy,
-          reason,
-        },
-      });
-    } else {
-      const currentState = approval.workflow.state;
-      const targetState = 'PAUSED';
-
-      validateTransition(currentState, targetState);
-
-      await prisma.workflow.update({
-        where: { id: approval.workflowId },
-        data: {
-          state: targetState,
-        },
-      });
-
-      await writeAuditLog({
-        workflowId: approval.workflowId,
-        actor: 'human',
-        action: 'approval_rejected',
-        fromState: currentState,
-        toState: targetState,
-        metadata: {
-          approvalId,
-          decidedBy,
-          reason,
-        },
-      });
-    }
-
-    return NextResponse.json({ success: true, approval: updatedApproval });
+    return NextResponse.json({ success: true, newState: 'WRITING_ERP' });
   } catch (error) {
-    console.error('Error processing approval decision:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to approve workflow' }, { status: 500 });
   }
 }
