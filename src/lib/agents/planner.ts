@@ -133,7 +133,7 @@ Respond ONLY with valid JSON matching this schema:
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error(
-        `Plan validation failed. Model returned invalid schema: ${JSON.stringify(error.issues, null, 2)}`
+        `Plan validation failed. Model returned: ${responseText}. Validation issues: ${JSON.stringify(error.issues, null, 2)}`
       );
     }
     if (error instanceof SyntaxError) {

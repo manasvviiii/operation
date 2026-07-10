@@ -5,7 +5,7 @@ import { writeAuditLog } from '@/lib/auditLog';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { decision, decidedBy, reason } = await request.json();
@@ -24,9 +24,8 @@ export async function POST(
       );
     }
 
-    const approvalId = params.id;
+    const { id: approvalId } = await params;
 
-    // Get the approval record
     const approval = await prisma.approval.findUnique({
       where: { id: approvalId },
       include: {
@@ -48,7 +47,6 @@ export async function POST(
       );
     }
 
-    // Update the Approval row
     const updatedApproval = await prisma.approval.update({
       where: { id: approvalId },
       data: {
@@ -60,11 +58,10 @@ export async function POST(
     });
 
     if (decision === 'APPROVED') {
-      // ValidateTransition and advance Workflow out of PENDING_APPROVAL
       const currentState = approval.workflow.state;
       const targetState = 'WRITING_ERP';
-      
-      validateTransition(currentState as any, targetState);
+
+      validateTransition(currentState, targetState);
 
       await prisma.workflow.update({
         where: { id: approval.workflowId },
@@ -75,21 +72,21 @@ export async function POST(
 
       await writeAuditLog({
         workflowId: approval.workflowId,
-        actor: decidedBy,
+        actor: 'human',
         action: 'approval_approved',
         fromState: currentState,
         toState: targetState,
         metadata: {
           approvalId,
+          decidedBy,
           reason,
         },
       });
     } else {
-      // On REJECTED: move Workflow to PAUSED
       const currentState = approval.workflow.state;
       const targetState = 'PAUSED';
-      
-      validateTransition(currentState as any, targetState);
+
+      validateTransition(currentState, targetState);
 
       await prisma.workflow.update({
         where: { id: approval.workflowId },
@@ -100,12 +97,13 @@ export async function POST(
 
       await writeAuditLog({
         workflowId: approval.workflowId,
-        actor: decidedBy,
+        actor: 'human',
         action: 'approval_rejected',
         fromState: currentState,
         toState: targetState,
         metadata: {
           approvalId,
+          decidedBy,
           reason,
         },
       });

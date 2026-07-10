@@ -1,19 +1,63 @@
-import { prisma } from '@/lib/prisma'; // Make sure your prisma.ts file is set up to export the client
+import { prisma } from './prisma';
+import { normalizeUpdate, sendMessage } from './connectors/telegram';
+import { runAgentLoop } from './runAgentLoop';
 
-export async function handleInbound(channel: string, payload: any, workflowId: string) {
-  const chatId = payload.message.chat.id.toString();
-  const text = payload.message.text;
+export async function handleInboundUpdate(rawUpdate: any): Promise<void> {
+  const inbound = normalizeUpdate(rawUpdate);
+  if (!inbound) {
+    return;
+  }
 
-  // Audit Log: Store the message in Neon before doing anything else
-  await prisma.message.create({
-    data: {
-      workflowId,
-      content: text,
-      direction: 'INBOUND',
-      channel: channel,
-      senderId: chatId,
-    },
-  });
+  const { chatId, senderId, body, externalMessageId, ts, workflowId } = inbound;
 
-  console.log(`[${channel}] Message saved for chat ${chatId}: ${text}`);
+  let workflow;
+
+  if (workflowId) {
+    workflow = await prisma.workflow.findUnique({ where: { id: workflowId } });
+
+    if (!workflow) {
+      console.warn(`[inbound] Unknown workflowId from /start link: ${workflowId}`);
+      return;
+    }
+
+    if (!workflow.chatId) {
+      workflow = await prisma.workflow.update({
+        where: { id: workflow.id },
+        data: { chatId },
+      });
+    }
+  } else {
+    workflow = await prisma.workflow.findFirst({ where: { chatId } });
+
+    if (!workflow) {
+      await sendMessage(
+        chatId,
+        "I don't recognize this chat — please use your onboarding link to start."
+      );
+      return;
+    }
+  }
+
+  try {
+    await prisma.message.create({
+      data: {
+        workflowId: workflow.id,
+        connectorId: 'telegram',
+        direction: 'INBOUND',
+        role: 'user',
+        channel: 'telegram',
+        senderId,
+        content: body,
+        externalMessageId,
+        createdAt: ts,
+      },
+    });
+
+    await runAgentLoop(workflow.id, 'inbound_message');
+  } catch (error) {
+    console.error(
+      `[inbound] Failed to process message for workflow ${workflow.id}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
 }
