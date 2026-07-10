@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  
+}
+
+enum VendorStatus {
+  PROSPECT
+  ACTIVE
+  BLOCKED
+}
+
+enum WorkflowState {
+  INITIATED
+  AWAITING_GST
+  AWAITING_PAN
+  AWAITING_BANK
+  VALIDATING
+  PENDING_APPROVAL
+  WRITING_ERP
+  COMPLETED
+  FAILED
+  CANCELLED
+  PAUSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum ApprovalDecision {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Vendor {
+  id            String     @id @default(uuid())
+  legalName     String
+  taxId         String?    @unique
+  contactEmail  String?
+  status        VendorStatus @default(PROSPECT)
+  createdAt     DateTime   @default(now())
+  workflows     Workflow[]
+}
+
+model Workflow {
+  id              String        @id @default(uuid())
+  vendorId        String
+  vendor          Vendor        @relation(fields: [vendorId], references: [id])
+  state           WorkflowState @default(INITIATED)
+  currentStep     String
+  chatId          String?
+  primaryChannel  String        @default("telegram")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  messages        Message[]
+  approvals       Approval[]
+  documents       Document[]
+  auditLogs       AuditLog[]
+  executions      Execution[]
+}
+
+model Execution {
+  id            String    @id @default(uuid())
+  workflowId    String
+  workflow      Workflow  @relation(fields: [workflowId], references: [id])
+  triggerSource String
+  status        String
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  error         String?
+  errorMessage  String?
+
+  agentRuns     AgentRun[]
+}
+
+model AgentRun {
+  id            String    @id @default(uuid())
+  executionId   String
+  execution     Execution @relation(fields: [executionId], references: [id])
+  agentName     String
+  status        String    @default("done")
+  input         Json
+  output        Json?
+  tokens        Int       @default(0)
+  latencyMs     Int?
+  startedAt     DateTime  @default(now())
+}
+
+model Message {
+  id                String   @id @default(uuid())
+  workflowId        String
+  workflow          Workflow @relation(fields: [workflowId], references: [id])
+  connectorId       String?
+  direction         MessageDirection @default(INBOUND)
+  role              String   @default("user")
+  channel           String   @default("telegram")
+  senderId          String?
+  content           String
+  attachments       Json?
+  externalMessageId String?  @unique
+  createdAt         DateTime @default(now())
+
+  @@index([workflowId, channel, createdAt])
+}
+
+model Approval {
+  id          String           @id @default(uuid())
+  workflowId  String
+  workflow    Workflow         @relation(fields: [workflowId], references: [id])
+  step        String
+  decision    ApprovalDecision @default(PENDING)
+  decidedBy   String?
+  reason      String?
+  requestedAt DateTime         @default(now())
+  decidedAt   DateTime?
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  workflowId  String
+  workflow    Workflow @relation(fields: [workflowId], references: [id])
+  actor       String
+  action      String
+  fromState   String?
+  toState     String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+}
+
+model Document {
+  id          String   @id @default(uuid())
+  workflowId  String
+  workflow    Workflow @relation(fields: [workflowId], references: [id])
+  type        String
+  storageUrl  String
+  mime        String
+  checksum    String
+  verified    Boolean  @default(false)
+  uploadedAt  DateTime @default(now())
+}
