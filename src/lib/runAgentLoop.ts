@@ -21,6 +21,22 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found`);
     }
+    // Stop processing if workflow is already completed
+if (workflow.state === 'COMPLETED') {
+  console.log('[runAgentLoop] Workflow already completed');
+
+  if (workflow.chatId) {
+    await telegramConnector.execute({
+      operation: 'sendMessage',
+      payload: {
+        chatId: workflow.chatId,
+        text: '✅ Your onboarding is already complete. No further action is required.',
+      },
+    });
+  }
+
+  return;
+}
 
     console.log('[runAgentLoop] loaded workflow', workflowId, 'state:', workflow.state, 'trigger:', triggerSource);
 
