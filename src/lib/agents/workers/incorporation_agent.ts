@@ -87,29 +87,43 @@ export function extractIncorporationCompanyName(
 ): string | null {
   const normalizedText = text.replace(/\r/g, '');
 
-  const patterns = [
+  const explicitPatterns = [
     /Name of the Company\s*[:\-]?\s*([^\n]+)/i,
     /Company Name\s*[:\-]?\s*([^\n]+)/i,
     /Corporate Name\s*[:\-]?\s*([^\n]+)/i,
     /Legal Name\s*[:\-]?\s*([^\n]+)/i,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of explicitPatterns) {
     const match = normalizedText.match(pattern);
-
-    if (!match?.[1]) {
-      continue;
+    if (match?.[1]) {
+      const companyName = match[1].replace(/\s+/g, ' ').trim();
+      if (companyName.length >= 2 && companyName.length <= 200) {
+        return companyName;
+      }
     }
+  }
 
-    const companyName = match[1]
-      .replace(/\s+/g, ' ')
-      .trim();
+  // Flatten text to handle OCR whitespace and newlines
+  const flatText = text.replace(/[\r\n]+/g, ' ');
+  const suffixPattern = /(?:PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|PVT\.?\s+LIMITED|PRIVATE\s+LTD\.?|LIMITED|LTD\.?|LLP)(?![A-Za-z])/i;
 
-    if (
-      companyName.length >= 2 &&
-      companyName.length <= 200
-    ) {
-      return companyName;
+  const anchors = [
+    new RegExp(`I hereby certify that\\s+(?:the\\s+name\\s+of\\s+the\\s+company\\s+is\\s+)?([A-Z0-9\\s\\.,\\&\\-]+?${suffixPattern.source})`, 'i'),
+    new RegExp(`CERTIFICATE OF INCORPORATION[^]*?([A-Z0-9\\s\\.,\\&\\-]+?${suffixPattern.source})`, 'i')
+  ];
+
+  for (const anchor of anchors) {
+    const match = flatText.match(anchor);
+    if (match?.[1]) {
+      let companyName = match[1].replace(/\s+/g, ' ').trim();
+      // Remove common prefix filler words captured by loose matching
+      companyName = companyName.replace(/^(?:this\s+|is\s+|to\s+|certify\s+|that\s+|of\s+|company\s+|the\s+|has\s+|been\s+|incorporated\s+|under\s+|hereby\s+|certifies\s+)+/i, '');
+      
+      // Ensure we don't capture excessively long strings indicating a regex run-away
+      if (companyName.length >= 2 && companyName.length <= 150) {
+        return companyName;
+      }
     }
   }
 
@@ -367,6 +381,13 @@ export async function run(
   // 5. Determine GST company name (Requirement 10)
   // -----------------------------------------------------------------------
   const gstCompanyName = getGstCompanyName(context);
+
+  console.log('[INCORPORATION DEBUG] document id:', document.id);
+  console.log('[INCORPORATION DEBUG] extraction method:', (extractionResult as any).method || 'vision');
+  console.log('[INCORPORATION DEBUG] extraction readable:', extractionResult.readable);
+  console.log('[INCORPORATION DEBUG] extracted text:', extractionResult.text);
+  console.log('[INCORPORATION DEBUG] GST company name:', gstCompanyName);
+  console.log('[INCORPORATION DEBUG] extracted incorporation company name:', incorporationCompanyName);
 
   // -----------------------------------------------------------------------
   // 6. Handle missing GST company name (Requirement 12)

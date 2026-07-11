@@ -280,6 +280,21 @@ describe('company name extraction', () => {
     );
     expect(name).toBe('ABC Manufacturing Private Limited');
   });
+
+  it('extracts company name following "I hereby certify that"', () => {
+    const text = 'I hereby certify that\nABC PRIVATE LIMITED\nis this day incorporated under the Companies Act';
+    expect(extractIncorporationCompanyName(text)).toBe('ABC PRIVATE LIMITED');
+  });
+
+  it('extracts company name following "I hereby certify that" with OCR whitespace', () => {
+    const text = 'I hereby certify that\n\n ABC   PRIVATE   LIMITED \n\n is this day incorporated';
+    expect(extractIncorporationCompanyName(text)).toBe('ABC PRIVATE LIMITED');
+  });
+
+  it('extracts company name near "CERTIFICATE OF INCORPORATION"', () => {
+    const text = 'CERTIFICATE OF INCORPORATION\n\nThis is to certify that XYZ PVT. LTD. has been incorporated';
+    expect(extractIncorporationCompanyName(text)).toBe('XYZ PVT. LTD.');
+  });
 });
 
 // ---------------------------------------------------------------------------
