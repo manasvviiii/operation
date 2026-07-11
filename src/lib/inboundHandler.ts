@@ -178,13 +178,37 @@ export async function handleInboundUpdate(
           attachmentMetadata.fileId
         );
 
+        /*
+         * Telegram file downloads may return
+         * application/octet-stream even when the uploaded
+         * file is actually a PDF or image.
+         *
+         * Prefer a specific Content-Type from the download.
+         * Otherwise fall back to Telegram attachment metadata.
+         * Telegram photos are always JPEG-compatible here.
+         */
         const finalMime =
-          mime ||
-          attachmentMetadata.mime ||
-          'application/octet-stream';
+          mime &&
+          mime !== 'application/octet-stream'
+            ? mime
+            : attachmentMetadata.mime ||
+              (attachmentMetadata.kind === 'photo'
+                ? 'image/jpeg'
+                : 'application/octet-stream');
+
+        console.log(
+          '[inbound] Resolved attachment MIME:',
+          {
+            downloadMime: mime,
+            attachmentMime:
+              attachmentMetadata.mime,
+            finalMime,
+          }
+        );
 
         const docMetadata: DocumentMetadata = {
           workflowId: workflow.id,
+
           type: attachmentMetadata.kind,
 
           originalFilename:
@@ -224,12 +248,34 @@ export async function handleInboundUpdate(
           documentId
         );
       } catch (error) {
-        console.error(
-          '[inbound] Failed to process attachment:',
+        const errorMessage =
           error instanceof Error
             ? error.message
-            : error
+            : String(error);
+
+        console.error(
+          '[inbound] Failed to process attachment:',
+          errorMessage
         );
+
+        /*
+         * Do not continue into runAgentLoop when attachment
+         * ingestion failed.
+         *
+         * Continuing would make the worker see no Document
+         * record and incorrectly ask for the same document
+         * again.
+         */
+        await telegramConnector.execute({
+          operation: 'sendMessage',
+          payload: {
+            chatId,
+            text:
+              'I received your file, but I could not store or process it. Please upload the document again.',
+          },
+        });
+
+        return;
       }
     }
   }
@@ -238,31 +284,47 @@ export async function handleInboundUpdate(
     await prisma.message.create({
       data: {
         workflowId: workflow.id,
+
         connectorId: 'telegram',
+
         direction: 'INBOUND',
+
         role: 'user',
+
         channel: 'telegram',
+
         senderId,
+
         content: body,
 
         attachments: attachmentMetadata
           ? {
               kind: attachmentMetadata.kind,
+
               fileId: attachmentMetadata.fileId,
+
               fileUniqueId:
                 attachmentMetadata.fileUniqueId,
+
               originalFilename:
                 attachmentMetadata.originalFilename,
+
               mime: attachmentMetadata.mime,
+
               fileSize: attachmentMetadata.fileSize,
+
               caption: attachmentMetadata.caption,
+
               width: attachmentMetadata.width,
+
               height: attachmentMetadata.height,
+
               documentId,
             }
           : undefined,
 
         externalMessageId,
+
         createdAt: ts,
       },
     });
