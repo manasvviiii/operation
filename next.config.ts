@@ -6,15 +6,8 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     '/api/**/*': [
       './prompts/**/*',
-      './node_modules/tesseract.js/src/worker-script/node/**/*',
-      './node_modules/tesseract-core/**/*',
     ],
   },
-
-  serverExternalPackages: [
-    'tesseract.js',
-    'tesseract-core',
-  ],
 };
 
 export default nextConfig;
