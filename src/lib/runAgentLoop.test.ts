@@ -826,4 +826,79 @@ describe('runAgentLoop', () => {
       })
     );
   });
+
+  it('Test: Valid PAN text automatically routes to pan_agent and transitions to AWAITING_BANK', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_PAN',
+        extractedFields: { gstin: '27ABCDE1234F1Z5' },
+      })
+    );
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg1', role: 'user', content: 'abcde1234f', createdAt: new Date() },
+      { id: 'msg2', role: 'assistant', content: 'Please provide PAN', createdAt: new Date(Date.now() - 1000) },
+    ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+      extractedData: { panNumber: 'ABCDE1234F' },
+    });
+
+    await runAgentLoop('test-workflow-id', 'test');
+
+    // Planner called with override
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          output: expect.objectContaining({
+            nextWorker: 'pan_agent',
+            targetState: 'AWAITING_BANK',
+          }),
+        }),
+      })
+    );
+
+    // Final state check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'AWAITING_BANK',
+          extractedFields: expect.objectContaining({
+            gstin: '27ABCDE1234F1Z5',
+            panNumber: 'ABCDE1234F',
+          }),
+        }),
+      })
+    );
+  });
+
+  it('Test: Invalid PAN text does not route to AWAITING_BANK', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_PAN',
+      })
+    );
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg1', role: 'user', content: 'hello', createdAt: new Date() },
+    ]);
+
+    mockPlanNext.mockResolvedValue({
+      nextWorker: 'doc_agent',
+      targetState: 'AWAITING_PAN',
+      reasoningSummary: 'No valid PAN found',
+    });
+
+    await runAgentLoop('test-workflow-id', 'test');
+
+    expect(mockPrisma.workflow.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: 'AWAITING_BANK' }),
+      })
+    );
+  });
 });

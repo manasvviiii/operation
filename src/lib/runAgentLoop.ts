@@ -13,6 +13,7 @@ import type {
 } from './agents/workers/types';
 import { TelegramConnector } from './connectors/telegramConnector';
 import { checkPrerequisites } from './validation/prerequisiteGuard';
+import { extractPan } from './agents/workers/pan_agent';
 
 function toJsonValue(
   value: unknown
@@ -365,6 +366,27 @@ export async function runAgentLoop(
           '[runAgentLoop] overriding planner route for pending agreement document:',
           pendingDocument.id
         );
+      }
+    } else {
+      /*
+       * TEXT ROUTING OVERRIDE
+       */
+      const latestUserMessage = messages.find((m) => m.role === 'user');
+      
+      if (workflow.state === 'AWAITING_PAN' && latestUserMessage) {
+        const pan = extractPan(latestUserMessage.content);
+        if (pan) {
+          plan = {
+            nextWorker: 'pan_agent',
+            targetState: 'AWAITING_BANK',
+            reasoningSummary:
+              'A valid PAN was found in the latest user message. Route directly to pan_agent for deterministic validation.',
+          };
+
+          console.log(
+            '[runAgentLoop] overriding planner route for valid PAN text'
+          );
+        }
       }
     }
 
