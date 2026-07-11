@@ -44,8 +44,11 @@ export async function POST(
     }
 
     if (approval.decision !== 'PENDING') {
+      if (approval.decision === decision) {
+        return NextResponse.json({ success: true, approval });
+      }
       return NextResponse.json(
-        { error: 'Approval has already been decided' },
+        { error: 'Approval has already been decided with a different decision' },
         { status: 400 }
       );
     }
@@ -124,7 +127,7 @@ export async function POST(
       });
 
       if (approval.workflow.chatId) {
-        const text = `Your onboarding approval request has been rejected. Reason: ${reason || 'No reason provided'}. The workflow is paused pending manual follow-up.`;
+        const text = `Your onboarding was not approved. Please contact the procurement team for further information.`;
         const telegramConnector = new TelegramConnector();
         await telegramConnector.execute({
           operation: 'sendMessage',

@@ -18,6 +18,8 @@ enum WorkflowState {
   AWAITING_GST
   AWAITING_PAN
   AWAITING_BANK
+  AWAITING_INCORPORATION
+  AWAITING_AGREEMENT
   VALIDATING
   PENDING_APPROVAL
   WRITING_ERP
@@ -42,6 +44,7 @@ model Vendor {
   id            String     @id @default(uuid())
   legalName     String
   taxId         String?    @unique
+  vendorCode    String?    @unique
   contactEmail  String?
   status        VendorStatus @default(PROSPECT)
   createdAt     DateTime   @default(now())
@@ -136,13 +139,23 @@ model AuditLog {
 }
 
 model Document {
-  id          String   @id @default(uuid())
-  workflowId  String
-  workflow    Workflow @relation(fields: [workflowId], references: [id])
-  type        String
-  storageUrl  String
-  mime        String
-  checksum    String
-  verified    Boolean  @default(false)
-  uploadedAt  DateTime @default(now())
+  id                String   @id @default(uuid())
+  workflowId        String
+  workflow          Workflow @relation(fields: [workflowId], references: [id])
+  type              String
+  category          String?
+  originalFilename  String
+  fileSize          Int
+  mime              String
+  checksum          String
+  storageUrl        String
+  telegramFileId    String?
+  telegramFileUniqueId String?
+  extractedFields   Json?
+  confidence        Float?
+  validationStatus   String   @default("pending")
+  validationError    String?
+  verified          Boolean  @default(false)
+  uploadedAt        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }

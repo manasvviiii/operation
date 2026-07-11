@@ -1,9 +1,13 @@
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock TelegramConnector (must be before imports that use it)
 const { mockTelegramExecute } = vi.hoisted(() => ({
-  mockTelegramExecute: vi.fn().mockResolvedValue({ success: true }),
+  mockTelegramExecute: vi
+    .fn()
+    .mockResolvedValue({ success: true }),
 }));
+
 vi.mock('./connectors/telegramConnector', () => ({
   TelegramConnector: class MockTelegramConnector {
     execute = mockTelegramExecute;
@@ -39,6 +43,7 @@ vi.mock('./runAgentLoop', () => ({
 }));
 
 import { prisma } from './prisma';
+
 const mockPrisma = prisma as any;
 const mockNormalizeUpdate = normalizeUpdate as any;
 const mockRunAgentLoop = runAgentLoop as any;
@@ -51,11 +56,21 @@ describe('handleInboundUpdate', () => {
   it('returns early and does nothing when normalizeUpdate returns null', async () => {
     mockNormalizeUpdate.mockReturnValue(null);
 
-    await handleInboundUpdate({ some: 'raw update' });
+    await handleInboundUpdate({
+      some: 'raw update',
+    });
 
-    expect(mockPrisma.workflow.findUnique).not.toHaveBeenCalled();
-    expect(mockPrisma.workflow.findFirst).not.toHaveBeenCalled();
-    expect(mockRunAgentLoop).not.toHaveBeenCalled();
+    expect(
+      mockPrisma.workflow.findUnique
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockPrisma.workflow.findFirst
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockRunAgentLoop
+    ).not.toHaveBeenCalled();
   });
 
   it('resolves workflow via /start deep link, binds chatId when not already set, and calls runAgentLoop', async () => {
@@ -73,21 +88,35 @@ describe('handleInboundUpdate', () => {
       chatId: null,
       state: 'INITIATED',
     });
+
     mockPrisma.workflow.update.mockResolvedValue({
       id: 'wf-1',
       chatId: 'chat-1',
       state: 'INITIATED',
     });
+
     mockPrisma.message.create.mockResolvedValue({});
+
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({ message: {} });
-
-    expect(mockPrisma.workflow.update).toHaveBeenCalledWith({
-      where: { id: 'wf-1' },
-      data: { chatId: 'chat-1' },
+    await handleInboundUpdate({
+      message: {},
     });
-    expect(mockPrisma.message.create).toHaveBeenCalledWith({
+
+    expect(
+      mockPrisma.workflow.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'wf-1',
+      },
+      data: {
+        chatId: 'chat-1',
+      },
+    });
+
+    expect(
+      mockPrisma.message.create
+    ).toHaveBeenCalledWith({
       data: {
         workflowId: 'wf-1',
         connectorId: 'telegram',
@@ -97,10 +126,18 @@ describe('handleInboundUpdate', () => {
         senderId: 'sender-1',
         content: '/start wf-1',
         externalMessageId: 'ext-1',
-        createdAt: new Date('2026-07-11T00:00:00Z'),
+        createdAt: new Date(
+          '2026-07-11T00:00:00Z'
+        ),
       },
     });
-    expect(mockRunAgentLoop).toHaveBeenCalledWith('wf-1', 'inbound_message');
+
+    expect(
+      mockRunAgentLoop
+    ).toHaveBeenCalledWith(
+      'wf-1',
+      'inbound_message'
+    );
   });
 
   it('does not re-bind chatId when the workflow already has one set', async () => {
@@ -115,16 +152,28 @@ describe('handleInboundUpdate', () => {
 
     mockPrisma.workflow.findUnique.mockResolvedValue({
       id: 'wf-1',
-      chatId: 'chat-1', // already bound
+      chatId: 'chat-1',
       state: 'AWAITING_GST',
     });
+
     mockPrisma.message.create.mockResolvedValue({});
+
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({ message: {} });
+    await handleInboundUpdate({
+      message: {},
+    });
 
-    expect(mockPrisma.workflow.update).not.toHaveBeenCalled();
-    expect(mockRunAgentLoop).toHaveBeenCalledWith('wf-1', 'inbound_message');
+    expect(
+      mockPrisma.workflow.update
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockRunAgentLoop
+    ).toHaveBeenCalledWith(
+      'wf-1',
+      'inbound_message'
+    );
   });
 
   it('logs a warning and returns early for an unknown workflowId from a /start link', async () => {
@@ -137,12 +186,21 @@ describe('handleInboundUpdate', () => {
       workflowId: 'wf-does-not-exist',
     });
 
-    mockPrisma.workflow.findUnique.mockResolvedValue(null);
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      null
+    );
 
-    await handleInboundUpdate({ message: {} });
+    await handleInboundUpdate({
+      message: {},
+    });
 
-    expect(mockPrisma.message.create).not.toHaveBeenCalled();
-    expect(mockRunAgentLoop).not.toHaveBeenCalled();
+    expect(
+      mockPrisma.message.create
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockRunAgentLoop
+    ).not.toHaveBeenCalled();
   });
 
   it('resolves an already-bound chatId with no workflowId and calls runAgentLoop', async () => {
@@ -160,13 +218,32 @@ describe('handleInboundUpdate', () => {
       chatId: 'chat-2',
       state: 'AWAITING_PAN',
     });
+
     mockPrisma.message.create.mockResolvedValue({});
+
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({ message: {} });
+    await handleInboundUpdate({
+      message: {},
+    });
 
-    expect(mockPrisma.workflow.findFirst).toHaveBeenCalledWith({ where: { chatId: 'chat-2' } });
-    expect(mockRunAgentLoop).toHaveBeenCalledWith('wf-2', 'inbound_message');
+    expect(
+      mockPrisma.workflow.findFirst
+    ).toHaveBeenCalledWith({
+      where: {
+        chatId: 'chat-2',
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    expect(
+      mockRunAgentLoop
+    ).toHaveBeenCalledWith(
+      'wf-2',
+      'inbound_message'
+    );
   });
 
   it('sends a fallback message and does not call runAgentLoop for an unrecognized chatId with no workflowId', async () => {
@@ -179,19 +256,32 @@ describe('handleInboundUpdate', () => {
       workflowId: undefined,
     });
 
-    mockPrisma.workflow.findFirst.mockResolvedValue(null);
+    mockPrisma.workflow.findFirst.mockResolvedValue(
+      null
+    );
 
-    await handleInboundUpdate({ message: {} });
+    await handleInboundUpdate({
+      message: {},
+    });
 
-    expect(mockTelegramExecute).toHaveBeenCalledWith({
+    expect(
+      mockTelegramExecute
+    ).toHaveBeenCalledWith({
       operation: 'sendMessage',
       payload: {
         chatId: 'chat-unknown',
-        text: "I don't recognize this chat — please use your onboarding link to start.",
+        text:
+          "I don't recognize this chat — please use your onboarding link to start.",
       },
     });
-    expect(mockPrisma.message.create).not.toHaveBeenCalled();
-    expect(mockRunAgentLoop).not.toHaveBeenCalled();
+
+    expect(
+      mockPrisma.message.create
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockRunAgentLoop
+    ).not.toHaveBeenCalled();
   });
 
   it('does not rethrow when runAgentLoop throws — catches and logs instead', async () => {
@@ -209,10 +299,18 @@ describe('handleInboundUpdate', () => {
       chatId: 'chat-3',
       state: 'VALIDATING',
     });
-    mockPrisma.message.create.mockResolvedValue({});
-    mockRunAgentLoop.mockRejectedValue(new Error('agent loop exploded'));
 
-    await expect(handleInboundUpdate({ message: {} })).resolves.not.toThrow();
+    mockPrisma.message.create.mockResolvedValue({});
+
+    mockRunAgentLoop.mockRejectedValue(
+      new Error('agent loop exploded')
+    );
+
+    await expect(
+      handleInboundUpdate({
+        message: {},
+      })
+    ).resolves.not.toThrow();
   });
 
   it('does not rethrow when message.create itself throws', async () => {
@@ -230,9 +328,20 @@ describe('handleInboundUpdate', () => {
       chatId: 'chat-4',
       state: 'AWAITING_BANK',
     });
-    mockPrisma.message.create.mockRejectedValue(new Error('db write failed'));
 
-    await expect(handleInboundUpdate({ message: {} })).resolves.not.toThrow();
-    expect(mockRunAgentLoop).not.toHaveBeenCalled();
+    mockPrisma.message.create.mockRejectedValue(
+      new Error('db write failed')
+    );
+
+    await expect(
+      handleInboundUpdate({
+        message: {},
+      })
+    ).resolves.not.toThrow();
+
+    expect(
+      mockRunAgentLoop
+    ).not.toHaveBeenCalled();
   });
 });
+

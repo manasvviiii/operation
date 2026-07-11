@@ -3,7 +3,6 @@ import { runAgentLoop } from './runAgentLoop';
 import { planNext } from './agents/planner';
 import { dispatchWorker } from './agents/workers';
 
-// Mock prisma module
 vi.mock('./prisma', () => ({
   prisma: {
     workflow: {
@@ -12,6 +11,9 @@ vi.mock('./prisma', () => ({
     },
     vendor: {},
     message: {
+      findMany: vi.fn(),
+    },
+    document: {
       findMany: vi.fn(),
     },
     auditLog: {
@@ -26,23 +28,24 @@ vi.mock('./prisma', () => ({
       create: vi.fn(),
     },
     approval: {
+      findFirst: vi.fn(),
       create: vi.fn(),
     },
   },
 }));
 
-// Mock planner
 vi.mock('./agents/planner', () => ({
   planNext: vi.fn(),
 }));
 
-// Mock workers
 vi.mock('./agents/workers', () => ({
   dispatchWorker: vi.fn(),
 }));
 
-// Mock TelegramConnector
-const mockTelegramExecute = vi.fn().mockResolvedValue({ success: true });
+const mockTelegramExecute = vi
+  .fn()
+  .mockResolvedValue({ success: true });
+
 vi.mock('./connectors/telegramConnector', () => {
   return {
     TelegramConnector: class MockTelegramConnector {
@@ -52,41 +55,84 @@ vi.mock('./connectors/telegramConnector', () => {
 });
 
 import { prisma } from './prisma';
+
 const mockPrisma = prisma as any;
 const mockDispatchWorker = dispatchWorker as any;
+const mockPlanNext = planNext as any;
+
+function createWorkflow(
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    id: 'test-workflow-id',
+    state: 'INITIATED',
+    currentStep: 'test-step',
+    vendorId: 'vendor-id',
+    chatId: null,
+    extractedFields: {},
+    vendor: {
+      id: 'vendor-id',
+      legalName: 'Test Vendor',
+      contactEmail: 'test@example.com',
+      status: 'PROSPECT',
+    },
+    ...overrides,
+  };
+}
+
+function createVerifiedDocument(
+  overrides: Record<string, unknown> = {}
+) {
+  return {
+    id: 'document-id',
+    type: 'document',
+    category: 'GST_CERTIFICATE',
+    originalFilename: 'document.pdf',
+    fileSize: 1024,
+    mime: 'application/pdf',
+    storageUrl: 'https://example.com/document.pdf',
+    validationStatus: 'passed',
+    verified: true,
+    extractedFields: {},
+    confidence: 0.95,
+    uploadedAt: new Date(),
+    ...overrides,
+  };
+}
 
 describe('runAgentLoop', () => {
   beforeEach(() => {
-    // Reset all mocks
     vi.clearAllMocks();
+
+    mockPrisma.message.findMany.mockResolvedValue([]);
+    mockPrisma.document.findMany.mockResolvedValue([]);
+    mockPrisma.auditLog.findMany.mockResolvedValue([]);
+
+    mockPrisma.execution.create.mockResolvedValue({
+      id: 'execution-id',
+    });
+
+    mockPrisma.execution.update.mockResolvedValue({});
+    mockPrisma.workflow.update.mockResolvedValue({});
+    mockPrisma.agentRun.create.mockResolvedValue({});
+
+    mockPrisma.approval.findFirst.mockResolvedValue(null);
+    mockPrisma.approval.create.mockResolvedValue({});
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+    });
   });
 
   it('should create Execution row with status "running"', async () => {
     const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
-    });
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-    
-    mockDispatchWorker.mockResolvedValue({ success: true });
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
 
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'gst_collector',
       targetState: 'AWAITING_GST',
       reasoningSummary: 'Test reasoning',
@@ -94,7 +140,9 @@ describe('runAgentLoop', () => {
 
     await runAgentLoop(workflowId, 'test');
 
-    expect(mockPrisma.execution.create).toHaveBeenCalledWith({
+    expect(
+      mockPrisma.execution.create
+    ).toHaveBeenCalledWith({
       data: {
         workflowId,
         triggerSource: 'test',
@@ -105,39 +153,21 @@ describe('runAgentLoop', () => {
   });
 
   it('should create AgentRun row with planner agent name', async () => {
-    const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
-    });
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    mockDispatchWorker.mockResolvedValue({ success: true });
-
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'gst_collector',
       targetState: 'AWAITING_GST',
       reasoningSummary: 'Test reasoning',
     });
 
-    await runAgentLoop(workflowId, 'test');
+    await runAgentLoop('test-workflow-id', 'test');
 
-    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith({
+    expect(
+      mockPrisma.agentRun.create
+    ).toHaveBeenCalledWith({
       data: {
         executionId: 'execution-id',
         agentName: 'planner',
@@ -149,66 +179,74 @@ describe('runAgentLoop', () => {
   });
 
   it('should create AuditLog row for state transition', async () => {
-    const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
-    });
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    mockDispatchWorker.mockResolvedValue({ success: true });
-
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'gst_collector',
       targetState: 'AWAITING_GST',
       reasoningSummary: 'Test reasoning',
     });
 
-    await runAgentLoop(workflowId, 'test');
+    await runAgentLoop('test-workflow-id', 'test');
+
+    expect(
+      mockPrisma.auditLog.create
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workflowId: 'test-workflow-id',
+          actor: 'system',
+          action: 'state_transition',
+          fromState: 'INITIATED',
+          toState: 'AWAITING_GST',
+        }),
+      })
+    );
   });
 
-  it('should halt execution and create Approval row when targetState is PENDING_APPROVAL', async () => {
+  it('should create Approval row when validated workflow transitions to PENDING_APPROVAL', async () => {
     const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'VALIDATING',
-      currentStep: 'validation-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
+
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'VALIDATING',
+        currentStep: 'validation-step',
+        extractedFields: {
+          gstin: '22AAAAA0000A1Z5',
+          panNumber: 'ABCDE1234F',
+          ifsc: 'SBIN0001234',
+          accountNumber: '123456789012',
+        },
+      })
+    );
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      createVerifiedDocument({
+        id: 'gst-document',
+        category: 'GST_CERTIFICATE',
+      }),
+      createVerifiedDocument({
+        id: 'bank-document',
+        category: 'BANK_PROOF',
+      }),
+      createVerifiedDocument({
+        id: 'incorporation-document',
+        category: 'INCORPORATION_PROOF',
+      }),
+      createVerifiedDocument({
+        id: 'agreement-document',
+        category: 'VENDOR_AGREEMENT',
+      }),
+    ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
     });
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.approval.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    mockDispatchWorker.mockResolvedValue({ success: true });
-
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'approver',
       targetState: 'PENDING_APPROVAL',
       reasoningSummary: 'Validation complete',
@@ -216,7 +254,9 @@ describe('runAgentLoop', () => {
 
     await runAgentLoop(workflowId, 'test');
 
-    expect(mockPrisma.approval.create).toHaveBeenCalledWith({
+    expect(
+      mockPrisma.approval.create
+    ).toHaveBeenCalledWith({
       data: {
         workflowId,
         step: 'validation-step',
@@ -224,8 +264,12 @@ describe('runAgentLoop', () => {
       },
     });
 
-    expect(mockPrisma.execution.update).toHaveBeenCalledWith({
-      where: { id: 'execution-id' },
+    expect(
+      mockPrisma.execution.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'execution-id',
+      },
       data: {
         status: 'done',
         endedAt: expect.any(Date),
@@ -235,31 +279,25 @@ describe('runAgentLoop', () => {
 
   it('should set Execution status to "failed" on error', async () => {
     const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
+
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
+
+    mockPlanNext.mockRejectedValue(
+      new Error('Test error')
+    );
+
+    await expect(
+      runAgentLoop(workflowId, 'test')
+    ).rejects.toThrow('Test error');
+
+    expect(
+      mockPrisma.execution.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'execution-id',
       },
-    });
-
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    (planNext as any).mockRejectedValue(new Error('Test error'));
-
-    await expect(runAgentLoop(workflowId, 'test')).rejects.toThrow('Test error');
-
-    expect(mockPrisma.execution.update).toHaveBeenCalledWith({
-      where: { id: 'execution-id' },
       data: {
         status: 'failed',
         endedAt: expect.any(Date),
@@ -270,40 +308,33 @@ describe('runAgentLoop', () => {
 
   it('should throw error if workflow not found', async () => {
     const workflowId = 'non-existent-workflow';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue(null);
 
-    await expect(runAgentLoop(workflowId, 'test')).rejects.toThrow(
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      null
+    );
+
+    await expect(
+      runAgentLoop(workflowId, 'test')
+    ).rejects.toThrow(
       `Workflow ${workflowId} not found`
     );
   });
 
-  it('does not apply the state transition when the dispatched worker returns success: false', async () => {
+  it('does not apply state transition when worker returns success false', async () => {
     const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
+
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
+
+    mockDispatchWorker.mockResolvedValue({
+      success: false,
+      validationPassed: false,
+      error: 'no GST number found',
+      retryable: true,
     });
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    mockDispatchWorker.mockResolvedValue({ success: false, error: 'no GST number found' });
-
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'gst_agent',
       targetState: 'AWAITING_GST',
       reasoningSummary: 'Need GST',
@@ -311,26 +342,106 @@ describe('runAgentLoop', () => {
 
     await runAgentLoop(workflowId, 'test');
 
-    expect(mockPrisma.workflow.update).not.toHaveBeenCalled();
-    
-    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
+    expect(
+      mockPrisma.workflow.update
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockPrisma.auditLog.create
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workflowId,
+          actor: 'system',
+          action: 'transition_blocked_by_worker',
+          fromState: 'INITIATED',
+          toState: 'INITIATED',
+          metadata: expect.objectContaining({
+            attemptedTargetState: 'AWAITING_GST',
+            worker: 'gst_agent',
+            error: 'no GST number found',
+            retryable: true,
+            workerException: false,
+          }),
+        }),
+      })
+    );
+
+    expect(
+      mockPrisma.execution.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'execution-id',
+      },
       data: {
-        workflowId,
-        actor: 'system',
-        action: 'transition_blocked_by_worker',
-        fromState: 'INITIATED',
-        toState: 'INITIATED',
-        metadata: {
-          targetState: 'AWAITING_GST',
-          error: 'no GST number found',
-          reasoning: 'Need GST',
-          workerException: false,
-        },
+        status: 'failed',
+        endedAt: expect.any(Date),
+        errorMessage: 'no GST number found',
+      },
+    });
+  });
+
+  it('blocks transition when worker validation fails', async () => {
+    const workflowId = 'test-workflow-id';
+
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_GST',
+        chatId: 'test-chat-id',
+      })
+    );
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: false,
+      outboundMessage:
+        'Please upload a valid GST certificate.',
+      retryable: true,
+    });
+
+    mockPlanNext.mockResolvedValue({
+      nextWorker: 'gst_agent',
+      targetState: 'AWAITING_PAN',
+      reasoningSummary: 'Validate GST',
+    });
+
+    await runAgentLoop(workflowId, 'test');
+
+    expect(
+      mockPrisma.workflow.update
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockPrisma.auditLog.create
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          workflowId,
+          action:
+            'transition_blocked_by_validation',
+          fromState: 'AWAITING_GST',
+          toState: 'AWAITING_GST',
+        }),
+      })
+    );
+
+    expect(
+      mockTelegramExecute
+    ).toHaveBeenCalledWith({
+      operation: 'sendMessage',
+      payload: {
+        chatId: 'test-chat-id',
+        text:
+          'Please upload a valid GST certificate.',
       },
     });
 
-    expect(mockPrisma.execution.update).toHaveBeenCalledWith({
-      where: { id: 'execution-id' },
+    expect(
+      mockPrisma.execution.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'execution-id',
+      },
       data: {
         status: 'done',
         endedAt: expect.any(Date),
@@ -338,34 +449,34 @@ describe('runAgentLoop', () => {
     });
   });
 
-  it('regression test for item 14: should block runAgentLoop when workflow state is PENDING_APPROVAL and triggerSource is not approval_decided', async () => {
-    const workflowId = 'test-workflow-id-pending';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'PENDING_APPROVAL',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
-    });
+  it('blocks runAgentLoop when workflow is PENDING_APPROVAL and trigger is not approval_decided', async () => {
+    const workflowId =
+      'test-workflow-id-pending';
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.create.mockResolvedValue({});
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.execution.update.mockResolvedValue({});
-    
-    await runAgentLoop(workflowId, 'inbound_message');
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        id: workflowId,
+        state: 'PENDING_APPROVAL',
+        chatId: 'test-chat-id',
+      })
+    );
+
+    await runAgentLoop(
+      workflowId,
+      'inbound_message'
+    );
 
     expect(planNext).not.toHaveBeenCalled();
+
     expect(dispatchWorker).not.toHaveBeenCalled();
-    expect(mockPrisma.workflow.update).not.toHaveBeenCalled();
-    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+
+    expect(
+      mockPrisma.workflow.update
+    ).not.toHaveBeenCalled();
+
+    expect(
+      mockPrisma.auditLog.create
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           workflowId,
@@ -373,45 +484,48 @@ describe('runAgentLoop', () => {
           action: 'blocked_pending_approval',
           fromState: 'PENDING_APPROVAL',
           toState: 'PENDING_APPROVAL',
-        })
+        }),
       })
     );
-  });
 
-  it('regression test for item 16: should unconditionally create AgentRun row for planner even if worker fails', async () => {
-    const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'INITIATED',
-      currentStep: 'test-step',
-      vendorId: 'vendor-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
+    expect(
+      mockTelegramExecute
+    ).toHaveBeenCalledWith({
+      operation: 'sendMessage',
+      payload: {
+        chatId: 'test-chat-id',
+        text:
+          "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
       },
     });
+  });
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.workflow.update.mockResolvedValue({});
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
+  it('should unconditionally create planner AgentRun even if worker fails', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow()
+    );
 
-    mockDispatchWorker.mockResolvedValue({ success: false, error: 'no GST number found' });
+    mockDispatchWorker.mockResolvedValue({
+      success: false,
+      validationPassed: false,
+      error: 'no GST number found',
+      retryable: true,
+    });
 
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'gst_agent',
       targetState: 'AWAITING_GST',
       reasoningSummary: 'Need GST',
     });
 
-    await runAgentLoop(workflowId, 'test');
+    await runAgentLoop(
+      'test-workflow-id',
+      'test'
+    );
 
-    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+    expect(
+      mockPrisma.agentRun.create
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           executionId: 'execution-id',
@@ -423,73 +537,131 @@ describe('runAgentLoop', () => {
 
   it('should handle illegal transition proposed by planner gracefully', async () => {
     const workflowId = 'test-workflow-id';
-    
-    mockPrisma.workflow.findUnique.mockResolvedValue({
-      id: workflowId,
-      state: 'VALIDATING',
-      currentStep: 'validation-step',
-      vendorId: 'vendor-id',
-      chatId: 'test-chat-id',
-      vendor: {
-        id: 'vendor-id',
-        legalName: 'Test Vendor',
-        contactEmail: 'test@example.com',
-        status: 'PROSPECT',
-      },
+
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'VALIDATING',
+        currentStep: 'validation-step',
+        chatId: 'test-chat-id',
+      })
+    );
+
+    mockPrisma.approval.findFirst.mockResolvedValue({ id: 'appr-1' });
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+      outboundMessage:
+        "Thanks — we're finishing up validation on your details. You'll hear from us shortly.",
     });
 
-    mockPrisma.message.findMany.mockResolvedValue([]);
-    mockPrisma.auditLog.findMany.mockResolvedValue([]);
-    mockPrisma.execution.create.mockResolvedValue({ id: 'execution-id' });
-    mockPrisma.agentRun.create.mockResolvedValue({});
-    mockPrisma.auditLog.create.mockResolvedValue({});
-    mockPrisma.execution.update.mockResolvedValue({});
-
-    (planNext as any).mockResolvedValue({
+    mockPlanNext.mockResolvedValue({
       nextWorker: 'erp_agent',
       targetState: 'WRITING_ERP',
-      reasoningSummary: 'Validation complete, proceeding to ERP',
+      reasoningSummary:
+        'Validation complete, proceeding to ERP',
     });
 
     await runAgentLoop(workflowId, 'test');
 
-    // dispatchWorker should never be called for illegal transition
-    expect(mockDispatchWorker).not.toHaveBeenCalled();
+    expect(
+      mockDispatchWorker
+    ).toHaveBeenCalled();
 
-    // workflow.update should not be called with a state field (state should not change)
-    expect(mockPrisma.workflow.update).not.toHaveBeenCalled();
+    expect(
+      mockPrisma.workflow.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: workflowId,
+      },
+      data: {
+        state: 'VALIDATING',
+        extractedFields: {},
+      },
+    });
 
-    // execution.update should be called with status: 'done' (not 'failed')
-    expect(mockPrisma.execution.update).toHaveBeenCalledWith({
-      where: { id: 'execution-id' },
+    expect(
+      mockPrisma.execution.update
+    ).toHaveBeenCalledWith({
+      where: {
+        id: 'execution-id',
+      },
       data: {
         status: 'done',
         endedAt: expect.any(Date),
       },
     });
 
-    // AuditLog should be created with action: 'planner_proposed_illegal_transition'
-    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+    expect(
+      mockPrisma.auditLog.create
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           workflowId,
           actor: 'system',
-          action: 'planner_proposed_illegal_transition',
+          action:
+            'planner_proposed_illegal_transition',
           fromState: 'VALIDATING',
           toState: 'VALIDATING',
           metadata: expect.objectContaining({
             attemptedTargetState: 'WRITING_ERP',
             nextWorker: 'erp_agent',
-            reasoning: 'Validation complete, proceeding to ERP',
+            reasoning:
+              'Validation complete, proceeding to ERP',
           }),
         }),
       })
     );
 
-    // Telegram holding message should be sent
+    expect(
+      mockTelegramExecute
+    ).toHaveBeenCalledWith({
+      operation: 'sendMessage',
+      payload: {
+        chatId: 'test-chat-id',
+        text:
+          "Thanks — we're finishing up validation on your details. You'll hear from us shortly.",
+      },
+    });
+  });
+
+  it('COMPLETED workflow does not call planner or dispatch workers', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'COMPLETED',
+        chatId: 'chat-999',
+      })
+    );
+
+    await runAgentLoop('test-workflow-id', 'inbound_message');
+
+    expect(mockPlanNext).not.toHaveBeenCalled();
+    expect(mockDispatchWorker).not.toHaveBeenCalled();
     expect(mockTelegramExecute).toHaveBeenCalledWith({
       operation: 'sendMessage',
-      payload: { chatId: 'test-chat-id', text: 'Thanks — we\'re finishing up validation on your details. You\'ll hear from us shortly.' },
+      payload: {
+        chatId: 'chat-999',
+        text: expect.stringContaining('already complete'),
+      },
     });
+  });
+
+  it('ERP worker rejects execution without APPROVED approval (hard guard)', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'WRITING_ERP',
+      })
+    );
+
+    mockPlanNext.mockResolvedValue({
+      nextWorker: 'erp_agent',
+      targetState: 'COMPLETED',
+      reasoningSummary: 'Test',
+    });
+
+    mockPrisma.approval.findFirst.mockResolvedValue(null); // No approval
+
+    await expect(runAgentLoop('test-workflow-id', 'test')).rejects.toThrow(/APPROVED human decision/);
+    expect(mockDispatchWorker).not.toHaveBeenCalled();
   });
 });

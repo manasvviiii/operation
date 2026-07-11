@@ -75,7 +75,7 @@ describe('POST /api/approvals/[id]/decide', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 400 when the approval was already decided', async () => {
+  it('returns 200 when the approval was already decided with the SAME decision', async () => {
     mockPrisma.approval.findUnique.mockResolvedValue({
       id: 'appr-1',
       decision: 'APPROVED',
@@ -83,6 +83,18 @@ describe('POST /api/approvals/[id]/decide', () => {
       workflow: { state: 'PENDING_APPROVAL' },
     });
     const req = makeRequest({ decision: 'APPROVED', decidedBy: 'ops-user' });
+    const res = await POST(req, makeParams('appr-1'));
+    expect(res.status).toBe(200);
+  });
+
+  it('returns 400 when the approval was already decided with a DIFFERENT decision', async () => {
+    mockPrisma.approval.findUnique.mockResolvedValue({
+      id: 'appr-1',
+      decision: 'APPROVED',
+      workflowId: 'wf-1',
+      workflow: { state: 'PENDING_APPROVAL' },
+    });
+    const req = makeRequest({ decision: 'REJECTED', decidedBy: 'ops-user' });
     const res = await POST(req, makeParams('appr-1'));
     expect(res.status).toBe(400);
   });
@@ -217,7 +229,7 @@ describe('POST /api/approvals/[id]/decide', () => {
         operation: 'sendMessage',
         payload: expect.objectContaining({
           chatId: 'chat-999',
-          text: expect.stringContaining('incomplete docs'),
+          text: expect.stringContaining('Your onboarding was not approved'),
         }),
       })
     );

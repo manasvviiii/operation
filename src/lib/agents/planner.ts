@@ -39,12 +39,14 @@ export interface PlanContext {
 }
 
 const PlanSchema = z.object({
-  nextWorker: z.enum(['doc_agent', 'gst_agent', 'pan_agent', 'bank_agent', 'erp_agent']),
+  nextWorker: z.enum(['doc_agent', 'gst_agent', 'pan_agent', 'bank_agent', 'incorporation_agent', 'agreement_agent', 'erp_agent']),
   targetState: z.enum([
     'INITIATED',
     'AWAITING_GST',
     'AWAITING_PAN',
     'AWAITING_BANK',
+    'AWAITING_INCORPORATION',
+    'AWAITING_AGREEMENT',
     'VALIDATING',
     'PENDING_APPROVAL',
     'WRITING_ERP',
