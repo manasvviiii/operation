@@ -838,6 +838,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -876,6 +877,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -914,6 +916,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -957,6 +960,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -1000,6 +1004,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -1040,6 +1045,7 @@ describe('prerequisite guard: VENDOR_AGREEMENT requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {

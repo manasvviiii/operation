@@ -284,6 +284,13 @@ export async function runAgentLoop(
           console.log('[runAgentLoop] overriding planner route for valid PAN text');
         }
       }
+    } else if (workflow.state === 'VALIDATING' && triggerSource === 'inbound_message') {
+      plan = {
+        nextWorker: 'none',
+        targetState: 'PENDING_APPROVAL',
+        reasoningSummary: 'Deterministic routing to final validation.',
+      };
+      console.log('[runAgentLoop] overriding planner route for final validation');
     }
 
     if (!plan) {

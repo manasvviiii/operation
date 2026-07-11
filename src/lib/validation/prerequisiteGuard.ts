@@ -64,13 +64,18 @@ function hasValidatedBankProof(
 }
 
 function hasValidatedIncorporationProof(
+  extractedFields: Record<string, unknown>,
   documents: PrerequisiteDocument[]
 ): boolean {
-  return documents.some(
+  const hasDocument = documents.some(
     (document) =>
       document.verified &&
       document.category === 'INCORPORATION_PROOF'
   );
+
+  const hasNameMatch = extractedFields.companyNameMatch === true;
+
+  return hasDocument && hasNameMatch;
 }
 
 function hasValidatedVendorAgreement(
@@ -134,11 +139,11 @@ export function checkPrerequisites(
       };
 
     case 'AWAITING_AGREEMENT':
-      if (!hasValidatedIncorporationProof(documents)) {
+      if (!hasValidatedIncorporationProof(extractedFields, documents)) {
         return {
           passed: false,
           reason:
-            'A verified incorporation-proof document is required before moving to agreement collection.',
+            'A verified incorporation-proof document with matching company name is required before moving to agreement collection.',
         };
       }
 
@@ -178,11 +183,11 @@ export function checkPrerequisites(
         };
       }
 
-      if (!hasValidatedIncorporationProof(documents)) {
+      if (!hasValidatedIncorporationProof(extractedFields, documents)) {
         return {
           passed: false,
           reason:
-            'A verified incorporation-proof document is required before final validation.',
+            'A verified incorporation-proof document with matching company name is required before final validation.',
         };
       }
 
@@ -214,11 +219,11 @@ export function checkPrerequisites(
         };
       }
 
-      if (!hasValidatedIncorporationProof(documents)) {
+      if (!hasValidatedIncorporationProof(extractedFields, documents)) {
         return {
           passed: false,
           reason:
-            'A verified incorporation-proof document is required before approval.',
+            'A verified incorporation-proof document with matching company name is required before approval.',
         };
       }
 

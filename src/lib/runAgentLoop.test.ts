@@ -218,6 +218,7 @@ describe('runAgentLoop', () => {
           panNumber: 'ABCDE1234F',
           ifsc: 'SBIN0001234',
           accountNumber: '123456789012',
+          companyNameMatch: true,
         },
       })
     );
@@ -950,6 +951,114 @@ describe('runAgentLoop', () => {
             gstin: '27ABCDE1234F1Z5',
             panNumber: 'ABCDE1234F',
           }),
+        }),
+      })
+    );
+  });
+
+  it('Test: "continue" in VALIDATING deterministically routes to none and advances to PENDING_APPROVAL for valid packet', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'VALIDATING',
+        extractedFields: {
+          gstin: '27ABCDE1234F1Z5',
+          panNumber: 'ABCDE1234F',
+          ifsc: 'SBIN0001234',
+          accountNumber: '1234567890',
+          companyNameMatch: true,
+          incorporationCompanyName: 'ABC PRIVATE LIMITED',
+        },
+      })
+    );
+
+    const now = Date.now();
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg1', role: 'user', content: 'continue', createdAt: new Date(now) },
+    ]);
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      { id: 'doc1', category: 'GST_CERTIFICATE', verified: true },
+      { id: 'doc2', category: 'BANK_PROOF', verified: true },
+      { id: 'doc3', category: 'INCORPORATION_PROOF', verified: true },
+      { id: 'doc4', category: 'VENDOR_AGREEMENT', verified: true },
+    ]);
+
+    await runAgentLoop('test-workflow-id', 'inbound_message');
+
+    // Planner called with override
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          output: expect.objectContaining({
+            nextWorker: 'none',
+            targetState: 'PENDING_APPROVAL',
+          }),
+        }),
+      })
+    );
+
+    // Final state check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'PENDING_APPROVAL',
+        }),
+      })
+    );
+  });
+
+  it('Test: VALIDATING deterministically blocks progression if companyNameMatch is false', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'VALIDATING',
+        extractedFields: {
+          gstin: '27ABCDE1234F1Z5',
+          panNumber: 'ABCDE1234F',
+          ifsc: 'SBIN0001234',
+          accountNumber: '1234567890',
+          companyNameMatch: false,
+          incorporationCompanyName: null,
+        },
+      })
+    );
+
+    const now = Date.now();
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg1', role: 'user', content: 'continue', createdAt: new Date(now) },
+    ]);
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      { id: 'doc1', category: 'GST_CERTIFICATE', verified: true },
+      { id: 'doc2', category: 'BANK_PROOF', verified: true },
+      { id: 'doc3', category: 'INCORPORATION_PROOF', verified: true },
+      { id: 'doc4', category: 'VENDOR_AGREEMENT', verified: true },
+    ]);
+
+    await runAgentLoop('test-workflow-id', 'inbound_message');
+
+    // Planner called with override
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          output: expect.objectContaining({
+            nextWorker: 'none',
+            targetState: 'PENDING_APPROVAL',
+          }),
+        }),
+      })
+    );
+
+    // Workflow state should not have changed to PENDING_APPROVAL
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'VALIDATING',
         }),
       })
     );

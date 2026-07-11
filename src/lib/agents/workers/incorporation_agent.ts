@@ -408,13 +408,47 @@ export async function run(
     };
   }
 
+  if (!incorporationCompanyName) {
+    const confidence = calculateIncorporationConfidence(
+      classification.score,
+      false,
+      false,
+      extractionResult.confidence
+    );
+
+    await updateDocumentValidation(
+      document.id,
+      'failed',
+      {
+        classification: 'INCORPORATION_PROOF',
+        incorporationCompanyName: null,
+        gstCompanyName,
+        companyNameMatch: false,
+      },
+      confidence,
+      'Could not extract company name from the incorporation proof.'
+    );
+
+    return {
+      success: true,
+      validationPassed: false,
+      confidence,
+      outboundMessage:
+        'I could not find the company name on your incorporation proof. Please upload a clearer Certificate of Incorporation.',
+      retryable: true,
+      extractedData: {
+        incorporationCompanyName: null,
+        gstCompanyName,
+        companyNameMatch: false,
+        incorporationProofType: 'CERTIFICATE_OF_INCORPORATION',
+      },
+    };
+  }
+
   // -----------------------------------------------------------------------
   // 7. Compare incorporation and GST company names (Requirement 11)
   // -----------------------------------------------------------------------
-  if (
-    incorporationCompanyName &&
-    !companyNamesMatch(incorporationCompanyName, gstCompanyName)
-  ) {
+  if (!companyNamesMatch(incorporationCompanyName, gstCompanyName)) {
     const confidence = calculateIncorporationConfidence(
       classification.score,
       true,

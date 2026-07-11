@@ -693,6 +693,38 @@ describe('successful incorporation worker validation', () => {
       true
     );
   });
+
+  it('fails validation if incorporationCompanyName is null', async () => {
+    mockExtractDocumentText.mockResolvedValue({
+      readable: true,
+      text: 'Ministry of Corporate Affairs. CERTIFICATE OF INCORPORATION. REGISTERED OFFICE. Just some text without name.',
+      confidence: 0.9,
+    });
+
+    const result = await dispatchWorker(
+      'incorporation_agent',
+      createContext({
+        documents: [createDocument()],
+        extractedFields: {
+          legalName: 'ABC Manufacturing PVT. LTD.',
+        },
+      })
+    );
+
+    expect(result.validationPassed).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.outboundMessage).toContain('could not find the company name');
+    expect(mockUpdateDocumentValidation).toHaveBeenCalledWith(
+      'document-1',
+      'failed',
+      expect.objectContaining({
+        incorporationCompanyName: null,
+        companyNameMatch: false,
+      }),
+      expect.any(Number),
+      'Could not extract company name from the incorporation proof.'
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -746,6 +778,7 @@ describe('prerequisite guard INCORPORATION_PROOF requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
@@ -819,6 +852,7 @@ describe('prerequisite guard INCORPORATION_PROOF requirement', () => {
         panNumber: 'ABCDE1234F',
         ifsc: 'SBIN0001234',
         accountNumber: '123456789012',
+        companyNameMatch: true,
       },
       [
         {
