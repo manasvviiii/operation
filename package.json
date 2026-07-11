@@ -17,6 +17,7 @@
     "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "groq-sdk": "^1.3.0",
     "next": "16.2.10",
     "node-telegram-bot-api": "^1.1.2",
     "openai": "^6.46.0",

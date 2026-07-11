@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { z } from 'zod';
 import type { WorkflowState } from '../stateMachine';
 
@@ -55,26 +55,14 @@ const PlanSchema = z.object({
   reasoningSummary: z.string(),
 });
 
-export async function planNext(context: PlanContext): Promise<Plan> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not set in environment variables');
-  }
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ 
-    model: 'gemini-2.0-flash',
-    generationConfig: { responseMimeType: 'application/json' }
-  });
-
-  const systemPrompt = `You are a workflow planner for a Vendor Onboarding system. Your job is to analyze the current state of a vendor onboarding workflow and decide:
+const SYSTEM_PROMPT = `You are a workflow planner for a Vendor Onboarding system. Your job is to analyze the current state of a vendor onboarding workflow and decide:
 1. Which worker agent should be dispatched next
 2. What target state the workflow should transition to
 
 Available workers:
 - doc_agent: Handles document collection and processing
 - gst_agent: Handles GST information collection
-- pan_agent: Handles PAN information collection  
+- pan_agent: Handles PAN information collection
 - bank_agent: Handles bank details collection
 - erp_agent: Handles ERP system integration
 
@@ -91,44 +79,57 @@ Available workflow states:
 - CANCELLED: Workflow cancelled
 - PAUSED: Workflow paused
 
-You will be provided with:
-- Current workflow state and step
-- Vendor information
-- Recent messages from the vendor
-- Recent audit log history
+You will be provided with the current workflow state and step, vendor information, recent messages from the vendor, and recent audit log history.
 
-Respond ONLY with valid JSON matching this schema:
+Respond ONLY with valid JSON matching this schema, and nothing else — no prose, no markdown fences:
 {
   "nextWorker": "doc_agent" | "gst_agent" | "pan_agent" | "bank_agent" | "erp_agent",
   "targetState": "INITIATED" | "AWAITING_GST" | "AWAITING_PAN" | "AWAITING_BANK" | "VALIDATING" | "PENDING_APPROVAL" | "WRITING_ERP" | "COMPLETED" | "FAILED" | "CANCELLED" | "PAUSED",
   "reasoningSummary": "string explaining your decision"
 }`;
 
-  const contextData = JSON.stringify({
-    workflow: context.workflow,
-    vendor: context.vendor,
-    messages: context.messages,
-    auditLogs: context.auditLogs,
-  }, null, 2);
+export async function planNext(context: PlanContext): Promise<Plan> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY is not set in environment variables');
+  }
 
-  const prompt = `${systemPrompt}\n\nContext:\n${contextData}`;
+  const groq = new Groq({ apiKey });
+
+  const contextData = JSON.stringify(
+    {
+      workflow: context.workflow,
+      vendor: context.vendor,
+      messages: context.messages,
+      auditLogs: context.auditLogs,
+    },
+    null,
+    2
+  );
 
   let responseText = '';
-  
-  try {
-    const response = await model.generateContent(prompt);
-    responseText = response.response.text();
 
-    // Strip markdown code fences if present (defensive, though JSON mode shouldn't add them)
+  try {
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: `Context:\n${contextData}` },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    });
+
+    responseText = completion.choices[0]?.message?.content ?? '';
+
     const cleanedText = responseText
       .replace(/```json\s*/g, '')
       .replace(/```\s*/g, '')
       .trim();
 
     const parsedPlan = JSON.parse(cleanedText);
-    
     const validatedPlan = PlanSchema.parse(parsedPlan);
-    
+
     return validatedPlan;
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -2,6 +2,8 @@ import { prisma } from './prisma';
 import { validateTransition } from './stateMachine';
 import { writeAuditLog } from './auditLog';
 import { planNext, type PlanContext } from './agents/planner';
+import { dispatchWorker } from './agents/workers';
+import { sendMessage } from './connectors/telegram';
 
 export async function runAgentLoop(workflowId: string, triggerSource: string): Promise<void> {
   let executionId: string | null = null;
@@ -107,6 +109,54 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
         tokens: 0,
       },
     });
+
+    const workerContext = {
+      workflowId: workflow.id,
+      vendor: {
+        id: workflow.vendor.id,
+        legalName: workflow.vendor.legalName,
+        contactEmail: workflow.vendor.contactEmail,
+        status: workflow.vendor.status,
+      },
+      messages: context.messages,
+      plan: {
+        nextWorker: plan.nextWorker,
+        targetState: plan.targetState,
+        reasoningSummary: plan.reasoningSummary,
+      },
+    };
+
+    let workerResult;
+    try {
+      workerResult = await dispatchWorker(plan.nextWorker, workerContext);
+
+      await prisma.agentRun.create({
+        data: {
+          executionId: execution.id,
+          agentName: plan.nextWorker,
+          status: workerResult.success ? 'done' : 'failed',
+          input: workerContext as any,
+          output: workerResult as any,
+          tokens: 0,
+        },
+      });
+
+      if (workerResult.outboundMessage && workflow.chatId) {
+        await sendMessage(workflow.chatId, workerResult.outboundMessage);
+      }
+    } catch (workerError) {
+      console.error('Worker error:', workerError);
+      await prisma.agentRun.create({
+        data: {
+          executionId: execution.id,
+          agentName: plan.nextWorker,
+          status: 'failed',
+          input: workerContext as any,
+          output: { error: workerError instanceof Error ? workerError.message : String(workerError) },
+          tokens: 0,
+        },
+      });
+    }
 
     // If plan.targetState === "PENDING_APPROVAL": create an Approval row and stop
     if (plan.targetState === 'PENDING_APPROVAL') {
