@@ -2,7 +2,7 @@ import { WorkerContext, WorkerResult } from './types';
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
-const PAN_CANDIDATE_REGEX = /[A-Z]{5}[\s-]*[0-9]{4}[\s-]*[A-Z]/i;
+const PAN_CANDIDATE_REGEX = /\b[A-Z]{5}[\s-]*[0-9]{4}[\s-]*[A-Z]\b/i;
 
 export function normalizePan(value: string): string {
   return value
@@ -34,14 +34,20 @@ export function extractPan(text: string): string | null {
     : null;
 }
 
-function getLatestUserMessage(
-  context: WorkerContext
+export function getLatestUserMessage(
+  messages: { role: string; content: string; createdAt: Date }[]
 ): string | null {
-  const latestUserMessage = [...context.messages]
-    .reverse()
-    .find((message) => message.role === 'user');
+  const userMessages = messages.filter((message) => message.role === 'user');
+  
+  if (userMessages.length === 0) {
+    return null;
+  }
+  
+  const sorted = userMessages.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 
-  return latestUserMessage?.content ?? null;
+  return sorted[0].content;
 }
 
 function getExistingValidatedPan(
@@ -77,7 +83,9 @@ export async function run(
     };
   }
 
-  const latestUserMessage = getLatestUserMessage(context);
+  console.log('[PAN AGENT DEBUG] messages:', context.messages.length);
+  const latestUserMessage = getLatestUserMessage(context.messages);
+  console.log('[PAN AGENT DEBUG] selected message:', latestUserMessage);
 
   if (!latestUserMessage) {
     return {
@@ -90,6 +98,7 @@ export async function run(
   }
 
   const panNumber = extractPan(latestUserMessage);
+  console.log('[PAN AGENT DEBUG] extracted PAN:', panNumber);
 
   if (!panNumber) {
     return {
