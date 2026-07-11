@@ -1,306 +1,289 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ApprovalPanel } from '@/components/ApprovalPanel';
-import { StateBadge } from '@/components/StateBadge';
-import { getStepLabel } from '@/lib/dashboard/stepLabel';
 import { prisma } from '@/lib/prisma';
+import { getStepLabel } from '@/lib/dashboard/stepLabel';
+import { StateBadge } from '@/components/StateBadge';
+import { ApprovalPanel } from '@/components/ApprovalPanel';
 
-type TimelineEntry =
-  | {
-      kind: 'message';
-      ts: Date;
-      direction: string;
-      role: string;
-      channel: string;
-      content: string;
-    }
-  | {
-      kind: 'audit';
-      ts: Date;
-      actor: string;
-      action: string;
-      fromState: string | null;
-      toState: string | null;
-      metadata: unknown;
-    }
-  | {
-      kind: 'execution';
-      ts: Date;
-      triggerSource: string;
-      status: string;
-      endedAt: Date | null;
-      errorMessage: string | null;
-    }
-  | {
-      kind: 'agentRun';
-      ts: Date;
-      agentName: string;
-      status: string;
-      tokens: number;
-      latencyMs: number | null;
-      executionId: string;
-    };
-
-function formatDate(date: Date): string {
-  return date.toLocaleString();
+function timeAgo(date: Date): string {
+  const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+  let interval = seconds / 31536000;
+  if (interval > 1) return Math.floor(interval) + 'y ago';
+  interval = seconds / 2592000;
+  if (interval > 1) return Math.floor(interval) + 'mo ago';
+  interval = seconds / 86400;
+  if (interval > 1) return Math.floor(interval) + 'd ago';
+  interval = seconds / 3600;
+  if (interval > 1) return Math.floor(interval) + 'h ago';
+  interval = seconds / 60;
+  if (interval > 1) return Math.floor(interval) + 'm ago';
+  if (seconds < 10) return 'just now';
+  return Math.floor(seconds) + 's ago';
 }
 
-function formatTimeOnly(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatDateOnly(date: Date): string {
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-function formatMetadata(metadata: unknown): string | null {
-  if (metadata == null) return null;
-  try {
-    return JSON.stringify(metadata, null, 2);
-  } catch {
-    return String(metadata);
-  }
-}
-
-export default async function WorkflowDetailPage({
-  params,
-}: {
+type WorkflowDetailPageProps = {
   params: Promise<{ id: string }>;
-}) {
+};
+
+export default async function WorkflowDetailPage({ params }: WorkflowDetailPageProps) {
   const { id } = await params;
 
   const workflow = await prisma.workflow.findUnique({
     where: { id },
-    include: {
-      vendor: true,
-      messages: { orderBy: { createdAt: 'asc' } },
-      auditLogs: { orderBy: { createdAt: 'asc' } },
-      approvals: { orderBy: { requestedAt: 'desc' } },
-      executions: {
-        orderBy: { startedAt: 'asc' },
-        include: { agentRuns: { orderBy: { startedAt: 'asc' } } },
-      },
-    },
+    include: { vendor: true },
   });
 
   if (!workflow) {
-    notFound();
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+        <div className="p-4 rounded-full bg-zinc-100 text-zinc-400">
+          <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <h2 className="text-xl font-semibold text-zinc-900">Workflow Not Found</h2>
+        <p className="text-sm text-zinc-500">The workflow link you followed may be invalid or has been deleted.</p>
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-zinc-800 transition-colors"
+        >
+          ← Back to Workflows
+        </Link>
+      </div>
+    );
   }
 
-  const pendingApproval = workflow.approvals.find((a) => a.decision === 'PENDING');
-
-  const timeline: TimelineEntry[] = [
-    ...workflow.messages.map((message) => ({
-      kind: 'message' as const,
-      ts: message.createdAt,
-      direction: message.direction,
-      role: message.role,
-      channel: message.channel,
-      content: message.content,
-    })),
-    ...workflow.auditLogs.map((log) => ({
-      kind: 'audit' as const,
-      ts: log.createdAt,
-      actor: log.actor,
-      action: log.action,
-      fromState: log.fromState,
-      toState: log.toState,
-      metadata: log.metadata,
-    })),
-    ...workflow.executions.flatMap((execution) => {
-      const executionEntry: TimelineEntry = {
-        kind: 'execution',
-        ts: execution.startedAt,
-        triggerSource: execution.triggerSource,
-        status: execution.status,
-        endedAt: execution.endedAt,
-        errorMessage: execution.errorMessage,
-      };
-
-      const agentRunEntries: TimelineEntry[] = execution.agentRuns.map((run) => ({
-        kind: 'agentRun',
-        ts: run.startedAt,
-        agentName: run.agentName,
-        status: run.status,
-        tokens: run.tokens,
-        latencyMs: run.latencyMs,
-        executionId: execution.id,
-      }));
-
-      return [executionEntry, ...agentRunEntries];
+  const [messages, auditLogs, executions, pendingApproval] = await Promise.all([
+    prisma.message.findMany({
+      where: { workflowId: id },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
     }),
-  ].sort((a, b) => a.ts.getTime() - b.ts.getTime());
+    prisma.auditLog.findMany({
+      where: { workflowId: id },
+      orderBy: { createdAt: 'asc' },
+      take: 50,
+    }),
+    prisma.execution.findMany({
+      where: { workflowId: id },
+      include: { agentRuns: true },
+      orderBy: { startedAt: 'asc' },
+    }),
+    prisma.approval.findFirst({
+      where: { workflowId: id, decision: 'PENDING' },
+    }),
+  ]);
+
+  // Combine messages and audit logs
+  type TimelineItem =
+    | { type: 'message'; key: string; date: Date; data: typeof messages[number] }
+    | { type: 'audit'; key: string; date: Date; data: typeof auditLogs[number] };
+
+  const timelineItems: TimelineItem[] = [
+    ...messages.map((m) => ({ type: 'message' as const, key: `msg-${m.id}`, date: m.createdAt, data: m })),
+    ...auditLogs.map((a) => ({ type: 'audit' as const, key: `audit-${a.id}`, date: a.createdAt, data: a })),
+  ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <div>
-        <Link href="/dashboard" className="group inline-flex items-center text-sm font-medium text-zinc-500 hover:text-zinc-900 transition-colors">
-          <svg className="mr-2 h-4 w-4 transition-transform group-hover:-translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          Back to workflows
+        <Link
+          href="/dashboard"
+          className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
+        >
+          ← Back to Workflows
         </Link>
       </div>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+      {/* Header Card */}
+      <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">{workflow.vendor.legalName}</h1>
-            <div className="mt-4 flex flex-wrap gap-y-4 gap-x-8 text-sm">
-              <div>
-                <dt className="text-zinc-500 font-medium">Contact email</dt>
-                <dd className="mt-1 text-zinc-900">{workflow.vendor.contactEmail ?? '—'}</dd>
-              </div>
-              <div>
-                <dt className="text-zinc-500 font-medium">Tax ID</dt>
-                <dd className="mt-1 text-zinc-900">{workflow.vendor.taxId ?? '—'}</dd>
-              </div>
-              <div>
-                <dt className="text-zinc-500 font-medium">Current step</dt>
-                <dd className="mt-1 text-zinc-900">{getStepLabel(workflow.state)}</dd>
-              </div>
-              <div>
-                <dt className="text-zinc-500 font-medium">Chat ID</dt>
-                <dd className="mt-1 font-mono text-zinc-900">
-                  {workflow.chatId ?? <span className="text-zinc-400 italic font-sans">Not linked</span>}
-                </dd>
-              </div>
+            <h1 className="text-2xl font-bold text-zinc-900">{workflow.vendor.legalName}</h1>
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-zinc-500">
+              {workflow.vendor.contactEmail && (
+                <span>Email: <span className="text-zinc-700">{workflow.vendor.contactEmail}</span></span>
+              )}
+              {workflow.vendor.contactEmail && workflow.vendor.taxId && (
+                <span className="text-zinc-300">•</span>
+              )}
+              {workflow.vendor.taxId && (
+                <span>Tax ID: <span className="font-mono text-zinc-700">{workflow.vendor.taxId}</span></span>
+              )}
             </div>
           </div>
-          <div className="flex-shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="text-sm font-medium text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5">
+              Step: {getStepLabel(workflow.state)}
+            </div>
             <StateBadge state={workflow.state} />
           </div>
         </div>
-      </section>
+      </div>
 
+      {/* Operator Action / Pending Approval Section */}
       {pendingApproval && (
-        <ApprovalPanel approvalId={pendingApproval.id} step={pendingApproval.step} />
+        <div className="rounded-xl border border-amber-200 bg-amber-50/30 p-1 shadow-sm">
+          <ApprovalPanel approvalId={pendingApproval.id} step={getStepLabel(workflow.state)} />
+        </div>
       )}
 
-      <section className="rounded-xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
-        <div className="border-b border-zinc-200 bg-zinc-50/80 px-6 py-4">
-          <h2 className="text-lg font-semibold text-zinc-900">Workflow Timeline</h2>
-        </div>
+      {/* Timeline Section */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold text-zinc-900">Timeline & Chat Logs</h2>
         
-        <div className="p-6">
-          {timeline.length === 0 ? (
-            <div className="text-center py-12 text-zinc-500">
-              No activity recorded yet for this workflow.
-            </div>
+        <div className="relative border-l border-zinc-200 ml-4 pl-6 space-y-6 py-2">
+          {timelineItems.length === 0 ? (
+            <div className="text-sm text-zinc-500 italic pl-2">No events recorded yet.</div>
           ) : (
-            <div className="relative border-l-2 border-zinc-200 ml-4 space-y-8 pb-4">
-              {timeline.map((entry, index) => {
-                const isMessage = entry.kind === 'message';
-                const isAudit = entry.kind === 'audit';
-                const isTech = entry.kind === 'execution' || entry.kind === 'agentRun';
-
+            timelineItems.map((item) => {
+              if (item.type === 'message') {
+                const isOutbound = item.data.direction === 'OUTBOUND';
                 return (
-                  <div key={`${entry.kind}-${entry.ts.toISOString()}-${index}`} className="relative pl-8">
-                    {/* Timeline Dot/Icon */}
-                    <div className="absolute -left-[1.0625rem] top-1 flex h-8 w-8 items-center justify-center rounded-full bg-white ring-2 ring-zinc-200">
-                      {isMessage && entry.direction === 'INBOUND' && (
-                        <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-                        </svg>
-                      )}
-                      {isMessage && entry.direction === 'OUTBOUND' && (
-                        <svg className="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" />
-                        </svg>
-                      )}
-                      {isAudit && (
-                        <svg className="h-4 w-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      )}
-                      {isTech && (
-                        <svg className="h-4 w-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                        </svg>
-                      )}
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 mb-1">
-                      <span className="text-sm font-medium text-zinc-900">
-                        {isMessage && (entry.direction === 'INBOUND' ? 'Vendor Message' : 'System Message')}
-                        {isAudit && 'System Event'}
-                        {isTech && 'Technical Detail'}
-                      </span>
-                      <span className="text-xs text-zinc-500" title={formatDate(entry.ts)}>
-                        {formatDateOnly(entry.ts)} at {formatTimeOnly(entry.ts)}
-                      </span>
-                    </div>
-
-                    {isMessage && (
-                      <div className={`mt-2 rounded-xl p-4 text-sm shadow-sm border ${entry.direction === 'INBOUND' ? 'bg-blue-50/50 border-blue-100 text-blue-900' : 'bg-green-50/50 border-green-100 text-green-900'}`}>
-                        <p className="whitespace-pre-wrap">{entry.content}</p>
-                      </div>
-                    )}
-
-                    {isAudit && (
-                      <div className="mt-2 rounded-xl bg-zinc-50 border border-zinc-200 p-4 text-sm text-zinc-800 shadow-sm">
-                        <p className="font-medium">{entry.action}</p>
-                        {(entry.fromState || entry.toState) && (
-                          <div className="mt-2 flex items-center gap-2 text-xs text-zinc-500">
-                            <span className="rounded bg-zinc-200 px-2 py-1 font-mono">{entry.fromState ?? '—'}</span>
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
-                            <span className="rounded bg-zinc-200 px-2 py-1 font-mono">{entry.toState ?? '—'}</span>
-                          </div>
-                        )}
-                        {formatMetadata(entry.metadata) && (
-                          <details className="mt-3 group">
-                            <summary className="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-700">View Metadata</summary>
-                            <pre className="mt-2 overflow-x-auto rounded-lg bg-zinc-800 p-3 text-xs text-zinc-200">
-                              {formatMetadata(entry.metadata)}
-                            </pre>
-                          </details>
-                        )}
-                      </div>
-                    )}
-
-                    {isTech && entry.kind === 'execution' && (
-                      <details className="mt-2 group rounded-xl border border-zinc-200 bg-white">
-                        <summary className="cursor-pointer p-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 focus:outline-none">
-                          <div className="inline-flex items-center gap-2">
-                            <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-mono border border-zinc-200">Execution</span>
-                            <span className="text-zinc-500 text-xs">trigger: {entry.triggerSource}</span>
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${entry.status === 'failed' ? 'bg-red-50 text-red-700' : 'bg-zinc-100 text-zinc-700'}`}>
-                              {entry.status}
-                            </span>
-                          </div>
-                        </summary>
-                        <div className="border-t border-zinc-100 p-3 text-xs text-zinc-600 space-y-1 bg-zinc-50/50">
-                          {entry.endedAt && <p>Ended: {formatDate(entry.endedAt)}</p>}
-                          {entry.errorMessage && <p className="text-red-600 font-medium">Error: {entry.errorMessage}</p>}
+                  <div key={item.key} className="relative group">
+                    {/* Timeline dot */}
+                    <div className="absolute -left-[31px] top-4 h-2 w-2 rounded-full border border-zinc-300 bg-white ring-4 ring-white" />
+                    
+                    <div className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`rounded-2xl px-4 py-3 text-sm shadow-sm max-w-xl border ${
+                          isOutbound
+                            ? 'bg-blue-50 border-blue-200/60 text-blue-900 rounded-tr-none'
+                            : 'bg-zinc-50 border-zinc-200 text-zinc-900 rounded-tl-none'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-6 mb-1 text-[11px] font-medium opacity-60">
+                          <span>{isOutbound ? 'Outbound Message' : 'Inbound Message'}</span>
+                          <span title={item.date.toLocaleString()}>{timeAgo(item.date)}</span>
                         </div>
-                      </details>
-                    )}
-
-                    {isTech && entry.kind === 'agentRun' && (
-                      <details className="mt-2 group rounded-xl border border-zinc-200 bg-white">
-                        <summary className="cursor-pointer p-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 focus:outline-none">
-                          <div className="inline-flex items-center gap-2">
-                            <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-mono border border-zinc-200">AgentRun</span>
-                            <span className="text-zinc-900 font-semibold text-xs">{entry.agentName}</span>
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${entry.status === 'failed' ? 'bg-red-50 text-red-700' : 'bg-zinc-100 text-zinc-700'}`}>
-                              {entry.status}
-                            </span>
-                          </div>
-                        </summary>
-                        <div className="border-t border-zinc-100 p-3 text-xs text-zinc-600 space-y-1 bg-zinc-50/50">
-                          <p>Tokens: <span className="font-mono">{entry.tokens}</span></p>
-                          {entry.latencyMs != null && <p>Latency: <span className="font-mono">{entry.latencyMs}ms</span></p>}
-                          <p className="font-mono text-zinc-400">execId: {entry.executionId}</p>
-                        </div>
-                      </details>
-                    )}
+                        <div className="whitespace-pre-wrap leading-relaxed">{item.data.content}</div>
+                      </div>
+                    </div>
                   </div>
                 );
-              })}
-            </div>
+              } else {
+                const log = item.data;
+                const metadata = log.metadata as any;
+                const reason = metadata?.reason || metadata?.error || null;
+                
+                return (
+                  <div key={item.key} className="relative group flex items-start gap-3">
+                    {/* Timeline dot */}
+                    <div className="absolute -left-[32px] top-1.5 h-3.5 w-3.5 rounded-full border border-zinc-300 bg-zinc-50 flex items-center justify-center ring-4 ring-white">
+                      <div className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
+                    </div>
+
+                    <div className="bg-zinc-50/50 border border-zinc-100 rounded-xl px-4 py-2.5 text-xs text-zinc-600 w-full shadow-sm">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <div>
+                          <span className="font-semibold text-zinc-700 capitalize">{log.actor}</span>{' '}
+                          <span className="text-zinc-600">performed</span>{' '}
+                          <code className="px-1 py-0.5 rounded bg-zinc-100 font-mono text-[11px] text-zinc-800">
+                            {log.action}
+                          </code>
+                          {log.fromState && log.toState && (
+                            <span className="ml-1 text-zinc-500">
+                              ({log.fromState} → {log.toState})
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-zinc-400 font-medium shrink-0" title={item.date.toLocaleString()}>
+                          {timeAgo(item.date)}
+                        </span>
+                      </div>
+                      {reason && (
+                        <div className="mt-1.5 text-zinc-500 pl-3 border-l border-zinc-200 italic whitespace-pre-wrap">
+                          Note: {reason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+            })
           )}
         </div>
-      </section>
+      </div>
+
+      {/* Technical Details Section */}
+      <div className="border-t border-zinc-200 pt-6">
+        <details className="group">
+          <summary className="flex items-center justify-between cursor-pointer list-none text-sm font-semibold text-zinc-500 hover:text-zinc-800 transition-colors">
+            <span>Technical Details & Executions ({executions.length})</span>
+            <span className="transition-transform group-open:rotate-180">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          </summary>
+          <div className="mt-4 space-y-4">
+            {executions.length === 0 ? (
+              <div className="text-xs text-zinc-500 italic">No executions triggered yet.</div>
+            ) : (
+              executions.map((exec) => (
+                <div key={exec.id} className="rounded-xl border border-zinc-100 bg-zinc-50/50 p-4 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div>
+                      <span className="font-semibold text-zinc-800">Trigger:</span>{' '}
+                      <span className="font-mono text-zinc-600 bg-zinc-100 px-1 py-0.5 rounded">{exec.triggerSource}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                        exec.status === 'COMPLETED' || exec.status === 'success' || exec.status === 'done'
+                          ? 'bg-green-100 text-green-800'
+                          : exec.status === 'FAILED' || exec.status === 'failed' || exec.status === 'error'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-zinc-100 text-zinc-800'
+                      }`}>
+                        {exec.status}
+                      </span>
+                      <span className="text-zinc-400" title={exec.startedAt.toLocaleString()}>
+                        Started {timeAgo(exec.startedAt)}
+                      </span>
+                    </div>
+                  </div>
+                  {exec.errorMessage && (
+                    <div className="text-xs text-red-700 bg-red-50 p-2.5 rounded-lg border border-red-100 whitespace-pre-wrap font-mono">
+                      Error: {exec.errorMessage}
+                    </div>
+                  )}
+
+                  {/* Agent Runs */}
+                  {exec.agentRuns.length > 0 && (
+                    <div className="border-t border-zinc-100 pt-3 space-y-2">
+                      <div className="text-xs font-semibold text-zinc-700">Agent Executions:</div>
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-left text-[11px] text-zinc-500">
+                          <thead>
+                            <tr className="border-b border-zinc-200 text-zinc-700 font-medium">
+                              <th className="pb-1.5 pr-2">Agent</th>
+                              <th className="pb-1.5 px-2">Status</th>
+                              <th className="pb-1.5 px-2">Tokens</th>
+                              <th className="pb-1.5 pl-2 text-right">Started</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-100">
+                            {exec.agentRuns.map((run) => (
+                              <tr key={run.id} className="hover:bg-zinc-100/50">
+                                <td className="py-1.5 pr-2 font-semibold text-zinc-800">{run.agentName}</td>
+                                <td className="py-1.5 px-2 font-mono">{run.status}</td>
+                                <td className="py-1.5 px-2 font-mono">{run.tokens}</td>
+                                <td className="py-1.5 pl-2 text-right text-zinc-400" title={run.startedAt.toLocaleString()}>
+                                  {timeAgo(run.startedAt)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </details>
+      </div>
     </div>
   );
 }

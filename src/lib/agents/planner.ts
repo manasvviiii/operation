@@ -1,5 +1,6 @@
 import Groq from 'groq-sdk';
 import { z } from 'zod';
+import { withRetry } from '../retry';
 import type { WorkflowState } from '../stateMachine';
 
 export interface Plan {
@@ -55,40 +56,24 @@ const PlanSchema = z.object({
   reasoningSummary: z.string(),
 });
 
-const SYSTEM_PROMPT = `You are a workflow planner for a Vendor Onboarding system. Your job is to analyze the current state of a vendor onboarding workflow and decide:
-1. Which worker agent should be dispatched next
-2. What target state the workflow should transition to
+import fs from 'fs';
+import path from 'path';
 
-Available workers:
-- doc_agent: Handles document collection and processing
-- gst_agent: Handles GST information collection
-- pan_agent: Handles PAN information collection
-- bank_agent: Handles bank details collection
-- erp_agent: Handles ERP system integration
+export function loadPrompt(agentName: string, version: string): string {
+  const filePath = path.join(process.cwd(), 'prompts', agentName, `${version}.md`);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Prompt file not found for agent ${agentName}, version ${version}`);
+  }
+  const fileContent = fs.readFileSync(filePath, 'utf-8');
+  // Strip YAML frontmatter (everything between the first two '---' markers)
+  const promptText = fileContent.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+  if (!promptText) {
+    throw new Error(`Prompt text is empty after stripping frontmatter for ${agentName} v${version}`);
+  }
+  return promptText;
+}
 
-Available workflow states:
-- INITIATED: Workflow just started
-- AWAITING_GST: Waiting for GST information
-- AWAITING_PAN: Waiting for PAN information
-- AWAITING_BANK: Waiting for bank details
-- VALIDATING: Validating collected information
-- PENDING_APPROVAL: Awaiting human approval
-- WRITING_ERP: Writing data to ERP system
-- COMPLETED: Workflow finished successfully
-- FAILED: Workflow failed
-- CANCELLED: Workflow cancelled
-- PAUSED: Workflow paused
-
-You will be provided with the current workflow state and step, vendor information, recent messages from the vendor, and recent audit log history.
-
-Respond ONLY with valid JSON matching this schema, and nothing else — no prose, no markdown fences:
-{
-  "nextWorker": "doc_agent" | "gst_agent" | "pan_agent" | "bank_agent" | "erp_agent",
-  "targetState": "INITIATED" | "AWAITING_GST" | "AWAITING_PAN" | "AWAITING_BANK" | "VALIDATING" | "PENDING_APPROVAL" | "WRITING_ERP" | "COMPLETED" | "FAILED" | "CANCELLED" | "PAUSED",
-  "reasoningSummary": "string explaining your decision"
-}`;
-
-export async function planNext(context: PlanContext): Promise<Plan> {
+export async function planNext(context: PlanContext): Promise<{ plan: Plan; tokensUsed: number }> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error('GROQ_API_KEY is not set in environment variables');
@@ -110,17 +95,26 @@ export async function planNext(context: PlanContext): Promise<Plan> {
   let responseText = '';
 
   try {
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: `Context:\n${contextData}` },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-    });
+    const completion = await withRetry(
+      () =>
+        groq.chat.completions.create({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: loadPrompt('planner', 'v1') },
+            { role: 'user', content: `Context:\n${contextData}` },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.3,
+        }),
+      {
+        maxAttempts: 4,
+        baseDelayMs: 300,
+        onRetry: (attempt, err) => console.warn(`[planner] Groq call retry ${attempt}:`, err),
+      }
+    );
 
     responseText = completion.choices[0]?.message?.content ?? '';
+    const tokensUsed = completion.usage?.total_tokens ?? 0;
 
     const cleanedText = responseText
       .replace(/```json\s*/g, '')
@@ -130,7 +124,7 @@ export async function planNext(context: PlanContext): Promise<Plan> {
     const parsedPlan = JSON.parse(cleanedText);
     const validatedPlan = PlanSchema.parse(parsedPlan);
 
-    return validatedPlan;
+    return { plan: validatedPlan, tokensUsed };
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error(

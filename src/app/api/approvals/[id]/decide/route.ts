@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { validateTransition } from '@/lib/stateMachine';
 import { writeAuditLog } from '@/lib/auditLog';
+import { runAgentLoop } from '@/lib/runAgentLoop';
+import { TelegramConnector } from '@/lib/connectors/telegramConnector';
 
 export async function POST(
   request: NextRequest,
@@ -82,6 +84,10 @@ export async function POST(
           reason,
         },
       });
+
+      runAgentLoop(approval.workflowId, 'approval_decided').catch((err) => {
+        console.error('Error running agent loop after approval decision:', err);
+      });
     } else {
       const currentState = approval.workflow.state;
       const targetState = 'PAUSED';
@@ -107,6 +113,20 @@ export async function POST(
           reason,
         },
       });
+
+      if (approval.workflow.chatId) {
+        const text = `Your onboarding approval request has been rejected. Reason: ${reason || 'No reason provided'}. The workflow is paused pending manual follow-up.`;
+        const telegramConnector = new TelegramConnector();
+        await telegramConnector.execute({
+          operation: 'sendMessage',
+          payload: {
+            chatId: approval.workflow.chatId,
+            text,
+          },
+        }).catch((err) => {
+          console.error('Failed to send rejection message to vendor via telegram:', err);
+        });
+      }
     }
 
     return NextResponse.json({ success: true, approval: updatedApproval });

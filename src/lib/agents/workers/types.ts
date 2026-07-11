@@ -17,6 +17,7 @@ export interface WorkerContext {
     targetState: string;
     reasoningSummary: string;
   };
+  extractedFields?: Record<string, unknown>;
 }
 
 export interface WorkerResult {

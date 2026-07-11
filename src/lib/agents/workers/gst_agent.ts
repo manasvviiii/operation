@@ -7,7 +7,7 @@ export async function run(context: WorkerContext): Promise<WorkerResult> {
     return { success: true, outboundMessage: "Please share your GST number (15-character alphanumeric)." };
   }
 
-  const gstRegex = /\b[A-Za-z0-9]{15}\b/;
+  const gstRegex = /\b\d{2}[A-Za-z]{5}\d{4}[A-Za-z]{1}[A-Za-z\d]{1}Z[A-Za-z\d]{1}\b/;
   const match = latestMessage.content.match(gstRegex);
 
   if (match) {

@@ -3,9 +3,10 @@ import { validateTransition } from './stateMachine';
 import { writeAuditLog } from './auditLog';
 import { planNext, type PlanContext } from './agents/planner';
 import { dispatchWorker } from './agents/workers';
-import { sendMessage } from './connectors/telegram';
+import { TelegramConnector } from './connectors/telegramConnector';
 
 export async function runAgentLoop(workflowId: string, triggerSource: string): Promise<void> {
+  const telegramConnector = new TelegramConnector();
   let executionId: string | null = null;
 
   try {
@@ -20,6 +21,22 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
     if (!workflow) {
       throw new Error(`Workflow ${workflowId} not found`);
     }
+
+    console.log('[runAgentLoop] loaded workflow', workflowId, 'state:', workflow.state, 'trigger:', triggerSource);
+
+    if (workflow.state === 'PENDING_APPROVAL' && triggerSource !== 'approval_decided') {
+      console.log('[runAgentLoop] BLOCKED — workflow is PENDING_APPROVAL and trigger is not approval_decided, refusing to plan');
+      await writeAuditLog({
+        workflowId,
+        actor: 'system',
+        action: 'blocked_pending_approval',
+        fromState: 'PENDING_APPROVAL',
+        toState: 'PENDING_APPROVAL',
+      });
+      return;
+    }
+
+    console.log('[runAgentLoop] guard passed, proceeding to planner');
 
     const messages = await prisma.message.findMany({
       where: { workflowId },
@@ -73,42 +90,69 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
     });
     executionId = execution.id;
 
+    console.log('[runAgentLoop] calling planNext with context state:', context.workflow.state);
+
     // Call planNext() from planner.ts
-    const plan = await planNext(context);
+    const planResult = await planNext(context);
+    const plan = 'plan' in planResult ? planResult.plan : planResult;
+    const tokensUsed = 'tokensUsed' in planResult ? (planResult as any).tokensUsed : 0;
 
-    // Call stateMachine.validateTransition(workflow.state, plan.targetState)
-    validateTransition(workflow.state as any, plan.targetState);
+    console.log('[runAgentLoop] plan received:', JSON.stringify(plan));
 
-    // On valid transition: update Workflow.state, call writeAuditLog, create an AgentRun row
-    const updatedWorkflow = await prisma.workflow.update({
-      where: { id: workflowId },
-      data: {
-        state: plan.targetState,
-      },
-    });
-
-    await writeAuditLog({
-      workflowId,
-      actor: 'system',
-      action: 'state_transition',
-      fromState: workflow.state,
-      toState: plan.targetState,
-      metadata: {
-        triggerSource,
-        reasoning: plan.reasoningSummary,
-        nextWorker: plan.nextWorker,
-      },
-    });
-
+    // Create AgentRun row for the planner unconditionally
     await prisma.agentRun.create({
       data: {
         executionId: execution.id,
         agentName: 'planner',
         input: context as any,
-        output: plan as any,
-        tokens: 0,
+        output: { ...plan, promptVersion: 'v1' } as any,
+        tokens: tokensUsed,
       },
     });
+
+    // Call stateMachine.validateTransition(workflow.state, plan.targetState) as a SYNTAX/LEGALITY check only
+    try {
+      validateTransition(workflow.state as any, plan.targetState);
+    } catch (transitionError) {
+      // Illegal transition proposed by planner - handle gracefully
+      console.error('[runAgentLoop] Planner proposed illegal transition:', transitionError);
+      
+      // Write AuditLog for the illegal transition
+      await writeAuditLog({
+        workflowId,
+        actor: 'system',
+        action: 'planner_proposed_illegal_transition',
+        fromState: workflow.state,
+        toState: workflow.state, // unchanged - do not advance state
+        metadata: {
+          attemptedTargetState: plan.targetState,
+          nextWorker: plan.nextWorker,
+          reasoning: plan.reasoningSummary,
+          error: transitionError instanceof Error ? transitionError.message : String(transitionError),
+        },
+      });
+
+      // Send holding message to vendor if chatId exists
+      if (workflow.chatId) {
+        console.log('[runAgentLoop] sending holding message to vendor', workflow.chatId);
+        await telegramConnector.execute({
+          operation: 'sendMessage',
+          payload: { chatId: workflow.chatId, text: 'Thanks — we\'re finishing up validation on your details. You\'ll hear from us shortly.' },
+        });
+      }
+
+      // Update Execution to 'done' (not 'failed') - this was handled, not a crash
+      await prisma.execution.update({
+        where: { id: execution.id },
+        data: {
+          status: 'done',
+          endedAt: new Date(),
+        },
+      });
+
+      console.log('[runAgentLoop] execution marked done after illegal transition catch for workflow', workflowId);
+      return; // Exit normally, do not rethrow
+    }
 
     const workerContext = {
       workflowId: workflow.id,
@@ -124,60 +168,107 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
         targetState: plan.targetState,
         reasoningSummary: plan.reasoningSummary,
       },
+      extractedFields: (workflow.extractedFields && typeof workflow.extractedFields === 'object')
+        ? (workflow.extractedFields as Record<string, unknown>)
+        : undefined,
     };
 
+    console.log('[runAgentLoop] dispatching worker:', plan.nextWorker);
+
     let workerResult;
+    let workerException = false;
     try {
       workerResult = await dispatchWorker(plan.nextWorker, workerContext);
+      console.log('[runAgentLoop] worker result:', JSON.stringify(workerResult));
+    } catch (workerError) {
+      console.error('Worker error:', workerError);
+      workerException = true;
+      workerResult = {
+        success: false,
+        error: workerError instanceof Error ? workerError.message : String(workerError),
+      };
+      console.log('[runAgentLoop] worker result (from catch):', JSON.stringify(workerResult));
+    }
 
-      await prisma.agentRun.create({
+    // Create AgentRun row for the worker
+    await prisma.agentRun.create({
+      data: {
+        executionId: execution.id,
+        agentName: plan.nextWorker,
+        status: workerResult.success ? 'done' : 'failed',
+        input: workerContext as any,
+        output: workerResult as any,
+        tokens: 0,
+      },
+    });
+
+    if (workerResult.success === true) {
+      // Worker succeeded, proceed with transition
+      let mergedExtracted = {};
+      if (workflow.extractedFields && typeof workflow.extractedFields === 'object') {
+        mergedExtracted = { ...workflow.extractedFields };
+      }
+      if (workerResult.extractedData && typeof workerResult.extractedData === 'object') {
+        mergedExtracted = { ...mergedExtracted, ...workerResult.extractedData };
+      }
+
+      await prisma.workflow.update({
+        where: { id: workflowId },
         data: {
-          executionId: execution.id,
-          agentName: plan.nextWorker,
-          status: workerResult.success ? 'done' : 'failed',
-          input: workerContext as any,
-          output: workerResult as any,
-          tokens: 0,
+          state: plan.targetState,
+          extractedFields: mergedExtracted,
+        },
+      });
+
+      await writeAuditLog({
+        workflowId,
+        actor: 'system',
+        action: 'state_transition',
+        fromState: workflow.state,
+        toState: plan.targetState,
+        metadata: {
+          triggerSource,
+          reasoning: plan.reasoningSummary,
+          nextWorker: plan.nextWorker,
         },
       });
 
       if (workerResult.outboundMessage && workflow.chatId) {
-        await sendMessage(workflow.chatId, workerResult.outboundMessage);
+        console.log('[runAgentLoop] sending outbound telegram message to', workflow.chatId);
+        await telegramConnector.execute({ operation: 'sendMessage', payload: { chatId: workflow.chatId, text: workerResult.outboundMessage } });
       }
-    } catch (workerError) {
-      console.error('Worker error:', workerError);
-      await prisma.agentRun.create({
-        data: {
-          executionId: execution.id,
-          agentName: plan.nextWorker,
-          status: 'failed',
-          input: workerContext as any,
-          output: { error: workerError instanceof Error ? workerError.message : String(workerError) },
-          tokens: 0,
-        },
-      });
-    }
 
-    // If plan.targetState === "PENDING_APPROVAL": create an Approval row and stop
-    if (plan.targetState === 'PENDING_APPROVAL') {
-      await prisma.approval.create({
+      if (plan.targetState === 'PENDING_APPROVAL') {
+        await prisma.approval.create({
+          data: {
+            workflowId,
+            step: workflow.currentStep,
+            decision: 'PENDING',
+          },
+        });
+      }
+    } else {
+      // Worker returned success: false or threw an exception
+      await prisma.auditLog.create({
         data: {
           workflowId,
-          step: workflow.currentStep,
-          decision: 'PENDING',
+          actor: 'system',
+          action: 'transition_blocked_by_worker',
+          fromState: workflow.state,
+          toState: workflow.state,
+          metadata: {
+            targetState: plan.targetState,
+            error: workerResult.error,
+            reasoning: plan.reasoningSummary,
+            workerException,
+          },
         },
       });
-
-      // Update Execution status to "done" and set endedAt
-      await prisma.execution.update({
-        where: { id: execution.id },
-        data: {
-          status: 'done',
-          endedAt: new Date(),
-        },
-      });
-
-      return;
+      
+      if (workerResult.outboundMessage && workflow.chatId) {
+        console.log('[runAgentLoop] sending outbound telegram message (blocked path) to', workflow.chatId);
+        await telegramConnector.execute({ operation: 'sendMessage', payload: { chatId: workflow.chatId, text: workerResult.outboundMessage } });
+      }
     }
 
     // Update Execution status to "done" and set endedAt
@@ -188,8 +279,11 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
         endedAt: new Date(),
       },
     });
+
+    console.log('[runAgentLoop] execution marked done for workflow', workflowId);
   } catch (error) {
-    // On thrown error, set Execution status "failed" with the error message, then rethrow
+    // On thrown error outside worker, set Execution status "failed" with the error message, then rethrow
+    console.error('[runAgentLoop] CAUGHT ERROR — marking execution failed:', error);
     if (executionId) {
       await prisma.execution.update({
         where: { id: executionId },

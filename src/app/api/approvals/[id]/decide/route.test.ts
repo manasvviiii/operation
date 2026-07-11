@@ -20,6 +20,18 @@ vi.mock('@/lib/auditLog', () => ({
   writeAuditLog: vi.fn(),
 }));
 
+const mockRunAgentLoop = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/runAgentLoop', () => ({
+  runAgentLoop: (...args: any[]) => mockRunAgentLoop(...args),
+}));
+
+const mockTelegramExecute = vi.fn().mockResolvedValue({ success: true });
+vi.mock('@/lib/connectors/telegramConnector', () => ({
+  TelegramConnector: class MockTelegramConnector {
+    execute = mockTelegramExecute;
+  },
+}));
+
 import { prisma } from '@/lib/prisma';
 import { validateTransition } from '@/lib/stateMachine';
 import { writeAuditLog } from '@/lib/auditLog';
@@ -164,5 +176,50 @@ describe('POST /api/approvals/[id]/decide', () => {
 
     expect(res.status).toBe(500);
     expect(mockPrisma.workflow.update).not.toHaveBeenCalled();
+  });
+
+  it('on APPROVED, calls runAgentLoop and still returns success even if runAgentLoop rejects', async () => {
+    mockPrisma.approval.findUnique.mockResolvedValue({
+      id: 'appr-4',
+      decision: 'PENDING',
+      workflowId: 'wf-4',
+      workflow: { state: 'PENDING_APPROVAL' },
+    });
+    mockPrisma.approval.update.mockResolvedValue({ id: 'appr-4', decision: 'APPROVED' });
+    mockPrisma.workflow.update.mockResolvedValue({});
+    mockValidateTransition.mockReturnValue(undefined);
+    mockRunAgentLoop.mockRejectedValue(new Error('loop failed'));
+
+    const req = makeRequest({ decision: 'APPROVED', decidedBy: 'ops-user' });
+    const res = await POST(req, makeParams('appr-4'));
+
+    expect(mockRunAgentLoop).toHaveBeenCalledWith('wf-4', 'approval_decided');
+    expect(res.status).toBe(200);
+  });
+
+  it('on REJECTED with chatId, sends a Telegram message referencing the rejection reason', async () => {
+    mockPrisma.approval.findUnique.mockResolvedValue({
+      id: 'appr-5',
+      decision: 'PENDING',
+      workflowId: 'wf-5',
+      workflow: { state: 'PENDING_APPROVAL', chatId: 'chat-999' },
+    });
+    mockPrisma.approval.update.mockResolvedValue({ id: 'appr-5', decision: 'REJECTED' });
+    mockPrisma.workflow.update.mockResolvedValue({});
+    mockValidateTransition.mockReturnValue(undefined);
+
+    const req = makeRequest({ decision: 'REJECTED', decidedBy: 'ops-user', reason: 'incomplete docs' });
+    const res = await POST(req, makeParams('appr-5'));
+
+    expect(res.status).toBe(200);
+    expect(mockTelegramExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'sendMessage',
+        payload: expect.objectContaining({
+          chatId: 'chat-999',
+          text: expect.stringContaining('incomplete docs'),
+        }),
+      })
+    );
   });
 });

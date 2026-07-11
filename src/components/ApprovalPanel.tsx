@@ -11,25 +11,35 @@ type ApprovalPanelProps = {
 export function ApprovalPanel({ approvalId, step }: ApprovalPanelProps) {
   const router = useRouter();
   const [loading, setLoading] = useState<boolean>(false);
+  const [decidedBy, setDecidedBy] = useState('');
   const [reason, setReason] = useState('');
   
   async function submit(decision: 'APPROVED' | 'REJECTED') {
+    if (!decidedBy.trim()) {
+      alert('Operator Name is required.');
+      return;
+    }
     setLoading(true);
     try {
       const response = await fetch(`/api/approvals/${approvalId}/decide`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decision, reason }),
+        body: JSON.stringify({ decision, decidedBy: decidedBy.trim(), reason: reason.trim() || undefined }),
       });
       if (response.ok) {
         router.refresh();
       } else {
-        alert('Failed to process approval.');
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || 'Failed to process approval.');
       }
+    } catch (err) {
+      alert('An error occurred while submitting decision.');
     } finally {
       setLoading(false);
     }
   }
+
+  const isSubmitDisabled = loading || !decidedBy.trim();
 
   return (
     <div className="rounded-xl border border-amber-300 bg-amber-50 p-6 shadow-sm">
@@ -47,33 +57,52 @@ export function ApprovalPanel({ approvalId, step }: ApprovalPanelProps) {
         </div>
       </div>
       
-      <div className="mt-6">
-        <label htmlFor="reason" className="block text-sm font-medium text-amber-900">
-          Reason / Notes (Optional)
-        </label>
-        <textarea
-          id="reason"
-          name="reason"
-          rows={2}
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Add any notes about your decision..."
-          className="mt-2 block w-full rounded-lg border-amber-300 bg-white/70 px-4 py-2 text-sm text-zinc-900 shadow-sm focus:border-amber-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-50 transition-colors"
-          disabled={loading}
-        />
+      <div className="mt-6 space-y-4">
+        <div>
+          <label htmlFor="decidedBy" className="block text-sm font-medium text-amber-900">
+            Operator Name <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="decidedBy"
+            name="decidedBy"
+            type="text"
+            value={decidedBy}
+            onChange={(e) => setDecidedBy(e.target.value)}
+            placeholder="e.g. ops-user"
+            className="mt-2 block w-full rounded-lg border-amber-300 bg-white/70 px-4 py-2 text-sm text-zinc-900 shadow-sm focus:border-amber-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-50 transition-colors"
+            disabled={loading}
+            required
+          />
+        </div>
+
+        <div>
+          <label htmlFor="reason" className="block text-sm font-medium text-amber-900">
+            Reason / Notes (Optional)
+          </label>
+          <textarea
+            id="reason"
+            name="reason"
+            rows={2}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Add any notes about your decision..."
+            className="mt-2 block w-full rounded-lg border-amber-300 bg-white/70 px-4 py-2 text-sm text-zinc-900 shadow-sm focus:border-amber-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-50 transition-colors"
+            disabled={loading}
+          />
+        </div>
       </div>
 
       <div className="mt-6 flex items-center gap-3">
         <button 
           onClick={() => submit('APPROVED')} 
-          disabled={loading}
+          disabled={isSubmitDisabled}
           className="inline-flex items-center justify-center rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-amber-50 disabled:opacity-50 transition-colors"
         >
           {loading ? 'Processing...' : 'Approve'}
         </button>
         <button 
           onClick={() => submit('REJECTED')} 
-          disabled={loading}
+          disabled={isSubmitDisabled}
           className="inline-flex items-center justify-center rounded-lg border border-red-600 bg-transparent px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-amber-50 disabled:opacity-50 transition-colors"
         >
           {loading ? 'Processing...' : 'Reject'}

@@ -1,6 +1,9 @@
 import { prisma } from './prisma';
-import { normalizeUpdate, sendMessage } from './connectors/telegram';
+import { normalizeUpdate } from './connectors/telegram';
+import { TelegramConnector } from './connectors/telegramConnector';
 import { runAgentLoop } from './runAgentLoop';
+
+const telegramConnector = new TelegramConnector();
 
 export async function handleInboundUpdate(rawUpdate: any): Promise<void> {
   const inbound = normalizeUpdate(rawUpdate);
@@ -30,10 +33,7 @@ export async function handleInboundUpdate(rawUpdate: any): Promise<void> {
     workflow = await prisma.workflow.findFirst({ where: { chatId } });
 
     if (!workflow) {
-      await sendMessage(
-        chatId,
-        "I don't recognize this chat — please use your onboarding link to start."
-      );
+      await telegramConnector.execute({ operation: 'sendMessage', payload: { chatId, text: "I don't recognize this chat — please use your onboarding link to start." } });
       return;
     }
   }

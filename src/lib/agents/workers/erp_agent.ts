@@ -1,6 +1,22 @@
-/* MOCK: In production this would call the company's ERP system API (e.g. SAP, NetSuite, Oracle) to create the vendor master record. */
 import { WorkerContext, WorkerResult } from './types';
+import { ErpConnector } from '../../connectors/erpConnector';
 
 export async function run(context: WorkerContext): Promise<WorkerResult> {
-  return { success: true, outboundMessage: "Vendor onboarding complete — your record has been created in our system." };
+  const connector = new ErpConnector();
+  
+  const response = await connector.execute({
+    operation: 'createVendorRecord',
+    payload: { 
+      workflowId: context.workflowId, 
+      vendorId: context.vendor.id,
+      extractedFields: context.extractedFields
+    },
+    idempotencyKey: `erp-write-${context.workflowId}`
+  });
+
+  return {
+    success: response.success,
+    outboundMessage: response.success ? 'Vendor onboarding complete — your record has been created in our system.' : undefined,
+    error: response.error
+  };
 }
