@@ -210,94 +210,10 @@ export async function runAgentLoop(
 
     const planResult = await planNext(context);
 
-    let plan =
+    const plan =
       'plan' in planResult
         ? planResult.plan
         : planResult;
-
-    /*
-     * DOCUMENT ROUTING OVERRIDE
-     *
-     * Route a pending uploaded document to the deterministic worker for the
-     * current onboarding step instead of allowing doc_agent to acknowledge it
-     * with validationPassed=false and leave the workflow stuck.
-     */
-    const pendingDocument = documents.find(
-      (document) =>
-        !document.verified &&
-        document.validationStatus === 'pending'
-    );
-
-    if (pendingDocument) {
-      if (
-        workflow.state === 'INITIATED' ||
-        workflow.state === 'AWAITING_GST'
-      ) {
-        plan = {
-          nextWorker: 'gst_agent',
-          targetState: 'AWAITING_GST',
-          reasoningSummary:
-            'A pending uploaded document exists for the GST step. Route it directly to gst_agent for deterministic validation.',
-        };
-
-        console.log(
-          '[runAgentLoop] overriding planner route for pending GST document:',
-          pendingDocument.id
-        );
-      } else if (workflow.state === 'AWAITING_PAN') {
-        plan = {
-          nextWorker: 'pan_agent',
-          targetState: 'AWAITING_BANK',
-          reasoningSummary:
-            'A pending uploaded document exists for the PAN step. Route it directly to pan_agent for deterministic validation.',
-        };
-
-        console.log(
-          '[runAgentLoop] overriding planner route for pending PAN document:',
-          pendingDocument.id
-        );
-      } else if (workflow.state === 'AWAITING_BANK') {
-        plan = {
-          nextWorker: 'bank_agent',
-          targetState: 'AWAITING_INCORPORATION',
-          reasoningSummary:
-            'A pending uploaded document exists for the bank-proof step. Route it directly to bank_agent for deterministic validation.',
-        };
-
-        console.log(
-          '[runAgentLoop] overriding planner route for pending bank document:',
-          pendingDocument.id
-        );
-      } else if (
-        workflow.state === 'AWAITING_INCORPORATION'
-      ) {
-        plan = {
-          nextWorker: 'incorporation_agent',
-          targetState: 'AWAITING_AGREEMENT',
-          reasoningSummary:
-            'A pending uploaded document exists for the incorporation step. Route it directly to incorporation_agent for deterministic validation.',
-        };
-
-        console.log(
-          '[runAgentLoop] overriding planner route for pending incorporation document:',
-          pendingDocument.id
-        );
-      } else if (
-        workflow.state === 'AWAITING_AGREEMENT'
-      ) {
-        plan = {
-          nextWorker: 'agreement_agent',
-          targetState: 'VALIDATING',
-          reasoningSummary:
-            'A pending uploaded document exists for the agreement step. Route it directly to agreement_agent for deterministic validation.',
-        };
-
-        console.log(
-          '[runAgentLoop] overriding planner route for pending agreement document:',
-          pendingDocument.id
-        );
-      }
-    }
 
     const tokensUsed =
       'tokensUsed' in planResult &&
