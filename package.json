@@ -16,7 +16,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@google/generative-ai": "^0.24.1",
-    "@napi-rs/canvas": "^1.0.2",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@vercel/blob": "^2.6.1",
@@ -25,10 +24,10 @@
     "next": "16.2.10",
     "node-telegram-bot-api": "^1.1.2",
     "openai": "^6.46.0",
-    "pdf-parse": "^2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "tesseract.js": "^7.0.0",
+    "unpdf": "^1.6.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

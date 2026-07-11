@@ -1,15 +1,8 @@
-import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas';
+
+
 import { createWorker } from 'tesseract.js';
 import { getStorageProvider } from '../storage/vercelBlobProvider';
 import type { WorkerDocument } from '../agents/workers/types';
-
-if (typeof globalThis.DOMMatrix === 'undefined') {
-  Object.assign(globalThis, {
-    DOMMatrix,
-    ImageData,
-    Path2D,
-  });
-}
 
 export type TextExtractionMethod =
   | 'PDF_TEXT'
@@ -61,24 +54,23 @@ function hasUsableText(text: string): boolean {
 async function extractPdfText(
   fileData: Buffer
 ): Promise<TextExtractionResult> {
-  let parser: {
-    getText: () => Promise<{ text?: string }>;
-    destroy: () => Promise<void>;
-  } | null = null;
-
   try {
-    // Important: load pdf-parse only after DOMMatrix is available.
-    const { PDFParse } = await import('pdf-parse');
+    const { extractText, getDocumentProxy } =
+      await import('unpdf');
 
-    parser = new PDFParse({
-      data: new Uint8Array(fileData),
+    const pdf = await getDocumentProxy(
+      new Uint8Array(fileData)
+    );
+
+    const result = await extractText(pdf, {
+      mergePages: true,
     });
 
-    const result = await parser.getText();
+    const rawText = Array.isArray(result.text)
+      ? result.text.join('\n')
+      : result.text ?? '';
 
-    const text = normalizeExtractedText(
-      result.text ?? ''
-    );
+    const text = normalizeExtractedText(rawText);
 
     if (!hasUsableText(text)) {
       return {
@@ -108,10 +100,6 @@ async function extractPdfText(
           ? error.message
           : 'Unknown PDF text extraction error.',
     };
-  } finally {
-    if (parser) {
-      await parser.destroy();
-    }
   }
 }
 
@@ -172,7 +160,16 @@ async function extractImageText(
     };
   } finally {
     if (worker) {
-      await worker.terminate();
+      try {
+        await worker.terminate();
+      } catch (error) {
+        console.error(
+          '[textExtraction] Failed to terminate OCR worker:',
+          error instanceof Error
+            ? error.message
+            : error
+        );
+      }
     }
   }
 }
