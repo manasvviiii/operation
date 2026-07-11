@@ -765,4 +765,65 @@ describe('runAgentLoop', () => {
       })
     );
   });
+
+  it('Test: Deterministic recovery of stale AWAITING_GST state with verified document', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_GST',
+        extractedFields: { gstin: '27ABCDE1234F1Z5' },
+      })
+    );
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      createVerifiedDocument({
+        id: 'verified-gst',
+        verified: true,
+        validationStatus: 'passed',
+        category: 'GST_CERTIFICATE',
+      }),
+    ]);
+
+    mockPlanNext.mockResolvedValue({
+      nextWorker: 'pan_agent',
+      targetState: 'AWAITING_BANK',
+      reasoningSummary: 'Test',
+    });
+
+    await runAgentLoop('test-workflow-id', 'test');
+
+    // Recovery check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: { state: 'AWAITING_PAN' },
+      })
+    );
+
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'state_transition',
+          fromState: 'AWAITING_GST',
+          toState: 'AWAITING_PAN',
+          metadata: expect.objectContaining({
+            triggerSource: 'system_recovery',
+          }),
+        }),
+      })
+    );
+
+    // Planner called with updated context state
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          input: expect.objectContaining({
+            workflow: expect.objectContaining({
+              state: 'AWAITING_PAN',
+            }),
+          }),
+        }),
+      })
+    );
+  });
 });

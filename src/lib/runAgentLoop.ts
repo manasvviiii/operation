@@ -158,6 +158,53 @@ export async function runAgentLoop(
       take: 10,
     });
 
+    /*
+     * DETERMINISTIC RECOVERY
+     * 
+     * If the workflow is stuck in a state where the requirement is already met
+     * (e.g., from a past progression bug), fast-forward it deterministically 
+     * through the legal transition before planning.
+     */
+    let reconciledState = workflow.state;
+    const extractedFields = getExtractedFields(workflow.extractedFields);
+
+    if (workflow.state === 'AWAITING_GST' && checkPrerequisites('AWAITING_PAN', extractedFields, documents).passed) {
+      reconciledState = 'AWAITING_PAN';
+    } else if (workflow.state === 'AWAITING_PAN' && checkPrerequisites('AWAITING_BANK', extractedFields, documents).passed) {
+      reconciledState = 'AWAITING_BANK';
+    } else if (workflow.state === 'AWAITING_BANK' && checkPrerequisites('AWAITING_INCORPORATION', extractedFields, documents).passed) {
+      reconciledState = 'AWAITING_INCORPORATION';
+    } else if (workflow.state === 'AWAITING_INCORPORATION' && checkPrerequisites('AWAITING_AGREEMENT', extractedFields, documents).passed) {
+      reconciledState = 'AWAITING_AGREEMENT';
+    } else if (workflow.state === 'AWAITING_AGREEMENT' && checkPrerequisites('VALIDATING', extractedFields, documents).passed) {
+      reconciledState = 'VALIDATING';
+    }
+
+    if (reconciledState !== workflow.state) {
+      console.log(
+        `[runAgentLoop] deterministic recovery: reconciling ${workflow.state} -> ${reconciledState}`
+      );
+
+      await prisma.workflow.update({
+        where: { id: workflowId },
+        data: { state: reconciledState },
+      });
+
+      await writeAuditLog({
+        workflowId,
+        actor: 'system',
+        action: 'state_transition',
+        fromState: workflow.state,
+        toState: reconciledState,
+        metadata: {
+          triggerSource: 'system_recovery',
+          reasoning: 'Prerequisites for next state already met. Recovering stale workflow state.',
+        },
+      });
+
+      workflow.state = reconciledState;
+    }
+
     const context: PlanContext = {
       workflow: {
         id: workflow.id,
