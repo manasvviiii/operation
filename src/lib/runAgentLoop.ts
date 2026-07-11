@@ -14,6 +14,7 @@ import type {
 import { TelegramConnector } from './connectors/telegramConnector';
 import { checkPrerequisites } from './validation/prerequisiteGuard';
 import { extractPan, getLatestUserMessage } from './agents/workers/pan_agent';
+import { appendAgentEvent } from './observability/agentTimeline';
 
 function toJsonValue(
   value: unknown
@@ -93,6 +94,15 @@ export async function runAgentLoop(
       'trigger:',
       triggerSource
     );
+
+    await appendAgentEvent({
+      workflowId,
+      eventType: 'LOOP_STARTED',
+      status: 'success',
+      stateBefore: workflow.state,
+      stateAfter: workflow.state,
+      reasoningSummary: `Agent loop started via trigger: ${triggerSource}`,
+    });
 
     /*
      * Structural human approval gate.
@@ -203,6 +213,15 @@ export async function runAgentLoop(
         },
       });
 
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'STATE_TRANSITION',
+        status: 'success',
+        stateBefore: workflow.state,
+        stateAfter: reconciledState,
+        reasoningSummary: 'Prerequisites for next state already met. Recovering stale workflow state.',
+      });
+
       workflow.state = reconciledState;
     }
 
@@ -282,6 +301,17 @@ export async function runAgentLoop(
               'A valid PAN was found in the latest user message. Route directly to pan_agent for deterministic validation.',
           };
           console.log('[runAgentLoop] overriding planner route for valid PAN text');
+          
+          await appendAgentEvent({
+            workflowId,
+            eventType: 'ROUTING_OVERRIDE',
+            status: 'success',
+            agentName: 'planner',
+            workerName: plan.nextWorker,
+            stateBefore: workflow.state,
+            stateAfter: plan.targetState,
+            reasoningSummary: plan.reasoningSummary,
+          });
         }
       }
     } else if (workflow.state === 'VALIDATING' && triggerSource === 'inbound_message') {
@@ -297,7 +327,34 @@ export async function runAgentLoop(
           reasoningSummary: 'Deterministic routing to final validation.',
         };
         console.log('[runAgentLoop] overriding planner route for final validation');
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'ROUTING_OVERRIDE',
+          status: 'success',
+          agentName: 'planner',
+          workerName: plan.nextWorker,
+          stateBefore: workflow.state,
+          stateAfter: plan.targetState,
+          reasoningSummary: plan.reasoningSummary,
+        });
       }
+    } else if (workflow.state === 'WRITING_ERP') {
+      plan = {
+        nextWorker: 'erp_agent',
+        targetState: 'COMPLETED',
+        reasoningSummary: 'Deterministic routing to ERP agent after human approval.',
+      };
+      console.log('[runAgentLoop] overriding planner route for WRITING_ERP');
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'ROUTING_OVERRIDE',
+        status: 'success',
+        agentName: 'planner',
+        workerName: plan.nextWorker,
+        stateBefore: workflow.state,
+        stateAfter: plan.targetState,
+        reasoningSummary: plan.reasoningSummary,
+      });
     }
 
     if (!plan) {
@@ -307,6 +364,18 @@ export async function runAgentLoop(
         'tokensUsed' in planResult && typeof planResult.tokensUsed === 'number'
           ? planResult.tokensUsed
           : 0;
+          
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'PLAN_CREATED',
+        status: 'success',
+        agentName: 'planner',
+        workerName: plan.nextWorker,
+        stateBefore: workflow.state,
+        stateAfter: plan.targetState,
+        output: plan,
+        reasoningSummary: plan.reasoningSummary,
+      });
     }
 
     /*
@@ -443,6 +512,17 @@ export async function runAgentLoop(
           console.log(`[runAgentLoop] overriding planner route for remediation pending document ${pendingDocument.id} -> ${remediationWorker}`);
         }
       }
+
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'ROUTING_OVERRIDE',
+        status: 'success',
+        agentName: 'planner',
+        workerName: plan.nextWorker,
+        stateBefore: workflow.state,
+        stateAfter: plan.targetState,
+        reasoningSummary: plan.reasoningSummary,
+      });
     }
 
     console.log(
@@ -510,6 +590,15 @@ export async function runAgentLoop(
       plan.nextWorker
     );
 
+    await appendAgentEvent({
+      workflowId,
+      eventType: 'WORKER_DISPATCHED',
+      status: 'success',
+      workerName: plan.nextWorker,
+      input: workerContext,
+      reasoningSummary: `Dispatching ${plan.nextWorker}`,
+    });
+
     let workerResult: WorkerResult;
     let workerException = false;
 
@@ -566,6 +655,16 @@ export async function runAgentLoop(
         output: toJsonValue(workerResult),
         tokens: 0,
       },
+    });
+
+    await appendAgentEvent({
+      workflowId,
+      eventType: 'WORKER_RESULT',
+      status: workerResult.success ? 'success' : 'failed',
+      workerName: plan.nextWorker,
+      output: workerResult,
+      reasoningSummary: workerResult.success ? 'Worker execution completed' : 'Worker execution failed',
+      error: workerResult.error,
     });
 
     /*
@@ -642,6 +741,15 @@ export async function runAgentLoop(
         },
       });
 
+      await appendAgentEvent({
+        workflowId,
+        eventType: workerResult.retryable ? 'RETRY_SCHEDULED' : 'VALIDATION_FAILED',
+        status: 'failed',
+        workerName: plan.nextWorker,
+        error: workerResult.error,
+        reasoningSummary: workerResult.error ?? 'Validation failed',
+      });
+
       if (
         workerResult.outboundMessage &&
         workflow.chatId
@@ -680,6 +788,14 @@ export async function runAgentLoop(
     /*
      * Only validated worker output reaches this point.
      */
+    await appendAgentEvent({
+      workflowId,
+      eventType: 'VALIDATION_PASSED',
+      status: 'success',
+      workerName: plan.nextWorker,
+      reasoningSummary: 'Validation passed successfully',
+    });
+
     const mergedExtractedFields = {
       ...getExtractedFields(
         workflow.extractedFields
@@ -831,6 +947,16 @@ export async function runAgentLoop(
           nextWorker: plan.nextWorker,
         },
       });
+
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'STATE_TRANSITION',
+        status: 'success',
+        agentName: 'system',
+        stateBefore: workflow.state,
+        stateAfter: plan.targetState,
+        reasoningSummary: plan.reasoningSummary,
+      });
     }
 
     if (
@@ -885,6 +1011,15 @@ export async function runAgentLoop(
       },
     });
 
+    await appendAgentEvent({
+      workflowId,
+      eventType: 'LOOP_COMPLETED',
+      status: 'success',
+      stateBefore: finalState,
+      stateAfter: finalState,
+      reasoningSummary: 'Agent loop execution completed normally',
+    });
+
     console.log(
       '[runAgentLoop] execution completed for workflow',
       workflowId,
@@ -910,6 +1045,14 @@ export async function runAgentLoop(
               ? error.message
               : String(error),
         },
+      });
+
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'LOOP_FAILED',
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+        reasoningSummary: 'Agent loop execution failed',
       });
     }
 

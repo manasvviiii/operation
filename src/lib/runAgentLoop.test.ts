@@ -42,6 +42,10 @@ vi.mock('./agents/workers', () => ({
   dispatchWorker: vi.fn(),
 }));
 
+vi.mock('./observability/agentTimeline', () => ({
+  appendAgentEvent: vi.fn(),
+}));
+
 const mockTelegramExecute = vi
   .fn()
   .mockResolvedValue({ success: true });
@@ -246,7 +250,6 @@ describe('runAgentLoop', () => {
       success: true,
       validationPassed: true,
     });
-
     mockPlanNext.mockResolvedValue({
       nextWorker: 'approver',
       targetState: 'PENDING_APPROVAL',
@@ -254,6 +257,20 @@ describe('runAgentLoop', () => {
     });
 
     await runAgentLoop(workflowId, 'test');
+
+    const { appendAgentEvent } = await import('./observability/agentTimeline');
+    const calls = (appendAgentEvent as any).mock.calls;
+    const eventTypes = calls.map((c: any) => c[0].eventType);
+    
+    expect(eventTypes).toEqual([
+      'LOOP_STARTED',
+      'PLAN_CREATED',
+      'WORKER_DISPATCHED',
+      'WORKER_RESULT',
+      'VALIDATION_PASSED',
+      'STATE_TRANSITION',
+      'LOOP_COMPLETED'
+    ]);
 
     expect(
       mockPrisma.approval.create
@@ -654,16 +671,74 @@ describe('runAgentLoop', () => {
       })
     );
 
-    mockPlanNext.mockResolvedValue({
-      nextWorker: 'erp_agent',
-      targetState: 'COMPLETED',
-      reasoningSummary: 'Test',
-    });
-
     mockPrisma.approval.findFirst.mockResolvedValue(null); // No approval
 
     await expect(runAgentLoop('test-workflow-id', 'test')).rejects.toThrow(/APPROVED human decision/);
     expect(mockDispatchWorker).not.toHaveBeenCalled();
+  });
+
+  describe('Deterministic ERP execution after approval', () => {
+    it('approving PENDING_APPROVAL triggers ERP processing and advances to COMPLETED', async () => {
+      mockPrisma.workflow.findUnique.mockResolvedValue(
+        createWorkflow({
+          state: 'WRITING_ERP',
+        })
+      );
+
+      mockPrisma.approval.findFirst.mockResolvedValue({ id: 'appr-1', decision: 'APPROVED' });
+
+      mockDispatchWorker.mockResolvedValue({
+        success: true,
+        validationPassed: true,
+        extractedData: { vendorCode: 'ABC-VND-123' },
+      });
+
+      await runAgentLoop('test-workflow-id', 'approval_decided');
+
+      // The loop must deterministically bypass planner and dispatch erp_agent
+      expect(mockPlanNext).not.toHaveBeenCalled();
+      expect(mockDispatchWorker).toHaveBeenCalledWith('erp_agent', expect.any(Object));
+
+      // The loop must transition state to COMPLETED
+      expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'test-workflow-id' },
+          data: expect.objectContaining({
+            state: 'COMPLETED',
+            extractedFields: expect.objectContaining({ vendorCode: 'ABC-VND-123' }),
+          }),
+        })
+      );
+    });
+
+    it('ERP failure does not mark workflow COMPLETED and is recoverable/retryable', async () => {
+      mockPrisma.workflow.findUnique.mockResolvedValue(
+        createWorkflow({
+          state: 'WRITING_ERP',
+        })
+      );
+
+      mockPrisma.approval.findFirst.mockResolvedValue({ id: 'appr-1', decision: 'APPROVED' });
+
+      mockDispatchWorker.mockResolvedValue({
+        success: false,
+        validationPassed: false,
+        retryable: true,
+        error: 'ERP system timeout',
+      });
+
+      await runAgentLoop('test-workflow-id', 'approval_decided');
+
+      // Dispatch happens
+      expect(mockDispatchWorker).toHaveBeenCalledWith('erp_agent', expect.any(Object));
+
+      // Workflow remains in WRITING_ERP (the test mock returns undefined for the final workflow.update if validation fails earlier)
+      expect(mockPrisma.workflow.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ state: 'COMPLETED' }),
+        })
+      );
+    });
   });
 
   it('Test A & B: Pending GST document fast-forwards INITIATED to AWAITING_GST and advances to AWAITING_PAN on success', async () => {

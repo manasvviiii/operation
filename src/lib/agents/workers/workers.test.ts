@@ -9,6 +9,7 @@ import {
   classifyGstCertificate,
   extractGstin,
   isValidGstin,
+  extractLegalName,
 } from './gst_agent';
 import {
   classifyBankProof,
@@ -158,6 +159,50 @@ describe('GST validation helpers', () => {
         'GSTIN: 22AAAAA0000A1Z5'
       )
     ).toBe('22AAAAA0000A1Z5');
+  });
+
+  it('classifies GST certificate text', () => {
+    const result = classifyGstCertificate(`
+      GOVERNMENT OF INDIA
+      GOODS AND SERVICES TAX
+      REGISTRATION CERTIFICATE
+      FORM GST REG-06
+    `);
+
+    expect(result.isGstCertificate).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(3);
+  });
+
+  describe('extractLegalName', () => {
+    it('extracts "Legal Name of Business\nABC PRIVATE LIMITED\n2. Trade Name, if any" correctly', () => {
+      const text = 'Legal Name of Business\nABC PRIVATE LIMITED\n2. Trade Name, if any\nXYZ';
+      expect(extractLegalName(text)).toBe('ABC PRIVATE LIMITED');
+    });
+
+    it('handles label/value on the same line', () => {
+      const text = 'Legal Name of Business: ABC PRIVATE LIMITED\n2. Trade Name, if any';
+      expect(extractLegalName(text)).toBe('ABC PRIVATE LIMITED');
+    });
+
+    it('handles excessive OCR whitespace and empty lines', () => {
+      const text = 'Legal Name of Business \n \n  \nABC PRIVATE LIMITED \n \n2. Trade Name, if any';
+      expect(extractLegalName(text)).toBe('ABC PRIVATE LIMITED');
+    });
+
+    it('handles numbered GST field labels', () => {
+      const text = '1. Legal Name of Business\nABC PRIVATE LIMITED\n2. Trade Name, if any';
+      expect(extractLegalName(text)).toBe('ABC PRIVATE LIMITED');
+    });
+
+    it('Trade Name label is never returned as legalName', () => {
+      const text = 'Legal Name of Business\n\n2. Trade Name, if any\nXYZ';
+      expect(extractLegalName(text)).toBeNull(); // Missing value, jumps to next label
+    });
+
+    it('missing legal name returns null rather than persisting a field label', () => {
+      const text = '1. Legal Name\nConstitution of Business\nPrivate Limited';
+      expect(extractLegalName(text)).toBeNull();
+    });
   });
 
   it('classifies GST certificate text', () => {

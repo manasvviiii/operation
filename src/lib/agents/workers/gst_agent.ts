@@ -100,32 +100,65 @@ export function classifyGstCertificate(
   };
 }
 
+const GST_KNOWN_LABELS = [
+  'Trade Name, if any',
+  'Constitution of Business',
+  'Address of Principal Place of Business',
+  'Date of Liability',
+  'Period of Validity',
+  'Type of Registration',
+  'Particulars of Approving Authority',
+  'Signature',
+  'Name',
+  'Designation',
+  'Jurisdictional Office',
+  'Registration Certificate',
+  'Goods and Services Tax',
+];
+
+function isGstLabel(line: string): boolean {
+  // Strip numeric section prefixes like "1.", "2.", "3."
+  const stripped = line.replace(/^\d+\.\s*/, '').trim().toLowerCase();
+  if (!stripped) return false;
+  return GST_KNOWN_LABELS.some((label) => stripped === label.toLowerCase());
+}
+
 export function extractLegalName(
   text: string
 ): string | null {
-  const normalizedText = text.replace(/\r/g, '');
+  const lines = text.replace(/\r/g, '').split('\n').map(l => l.trim());
 
-  const patterns = [
-    /Legal Name of Business\s*[:\-]?\s*([^\n]+)/i,
-    /Legal Name\s*[:\-]?\s*([^\n]+)/i,
-  ];
+  let foundLabel = false;
 
-  for (const pattern of patterns) {
-    const match = normalizedText.match(pattern);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
 
-    if (!match?.[1]) {
-      continue;
-    }
+    // Check if current line contains the label
+    const labelMatch = line.match(/^(?:1\.\s*)?Legal Name(?: of Business)?\s*[:\-]?\s*(.*)/i);
+    if (labelMatch) {
+      const valueOnSameLine = labelMatch[1].trim();
+      if (valueOnSameLine && !isGstLabel(valueOnSameLine)) {
+        const legalName = valueOnSameLine.replace(/\s+/g, ' ');
+        if (legalName.length >= 2 && legalName.length <= 200) {
+          return legalName;
+        }
+      }
+      
+      // Look at subsequent lines
+      for (let j = i + 1; j < lines.length; j++) {
+        const nextLine = lines[j];
+        if (!nextLine) continue; // Skip empty lines
 
-    const legalName = match[1]
-      .replace(/\s+/g, ' ')
-      .trim();
+        // If the next non-empty line is another label, then legal name is missing
+        if (isGstLabel(nextLine)) {
+          return null;
+        }
 
-    if (
-      legalName.length >= 2 &&
-      legalName.length <= 200
-    ) {
-      return legalName;
+        const legalName = nextLine.replace(/\s+/g, ' ');
+        if (legalName.length >= 2 && legalName.length <= 200) {
+          return legalName;
+        }
+      }
     }
   }
 

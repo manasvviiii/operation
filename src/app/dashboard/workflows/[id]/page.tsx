@@ -97,12 +97,18 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
-      <div>
+      <div className="flex items-center justify-between">
         <Link
           href="/dashboard"
           className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 hover:text-zinc-800 transition-colors"
         >
           ← Back to Workflows
+        </Link>
+        <Link
+          href={`/dashboard/workflows/${id}/timeline`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-100 transition-colors"
+        >
+          View Agent Timeline &rarr;
         </Link>
       </div>
 

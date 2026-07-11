@@ -68,6 +68,7 @@ model Workflow {
   documents       Document[]
   auditLogs       AuditLog[]
   executions      Execution[]
+  agentEvents     AgentEvent[]
 }
 
 model Execution {
@@ -158,4 +159,26 @@ model Document {
   verified          Boolean  @default(false)
   uploadedAt        DateTime @default(now())
   updatedAt         DateTime @updatedAt
+}
+
+model AgentEvent {
+  id               String   @id @default(uuid())
+  workflowId       String
+  workflow         Workflow @relation(fields: [workflowId], references: [id])
+  sequenceNumber   Int
+  eventType        String
+  agentName        String?
+  workerName       String?
+  toolName         String?
+  input            Json?
+  output           Json?
+  reasoningSummary String?
+  stateBefore      String?
+  stateAfter       String?
+  status           String
+  latencyMs        Int?
+  error            String?
+  createdAt        DateTime @default(now())
+
+  @@unique([workflowId, sequenceNumber])
 }
