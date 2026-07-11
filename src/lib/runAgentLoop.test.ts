@@ -664,4 +664,105 @@ describe('runAgentLoop', () => {
     await expect(runAgentLoop('test-workflow-id', 'test')).rejects.toThrow(/APPROVED human decision/);
     expect(mockDispatchWorker).not.toHaveBeenCalled();
   });
+
+  it('Test A & B: Pending GST document fast-forwards INITIATED to AWAITING_GST and advances to AWAITING_PAN on success', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'INITIATED',
+      })
+    );
+
+    mockPrisma.document.findMany
+      .mockResolvedValueOnce([
+        createVerifiedDocument({
+          id: 'pending-gst',
+          verified: false,
+          validationStatus: 'pending',
+        }),
+      ])
+      .mockResolvedValueOnce([
+        createVerifiedDocument({
+          id: 'pending-gst',
+          verified: true,
+          validationStatus: 'passed',
+        }),
+      ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+      extractedData: { gstin: '27ABCDE1234F1Z5' },
+    });
+
+    await runAgentLoop('test-workflow-id', 'test');
+
+    // Fast-forward check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({ state: 'AWAITING_GST' }),
+      })
+    );
+
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'state_transition_fast_forward',
+          fromState: 'INITIATED',
+          toState: 'AWAITING_GST',
+        }),
+      })
+    );
+
+    // Final state check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'AWAITING_PAN',
+          extractedFields: expect.any(Object),
+        }),
+      })
+    );
+
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'state_transition',
+          fromState: 'AWAITING_GST',
+          toState: 'AWAITING_PAN',
+        }),
+      })
+    );
+  });
+
+  it('Test C: GST validation failure must not advance to AWAITING_PAN', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_GST',
+      })
+    );
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      createVerifiedDocument({
+        id: 'pending-gst',
+        verified: false,
+        validationStatus: 'pending',
+      }),
+    ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: false,
+      outboundMessage: 'Invalid GST',
+    });
+
+    await runAgentLoop('test-workflow-id', 'test');
+
+    expect(mockPrisma.workflow.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ state: 'AWAITING_PAN' }),
+      })
+    );
+  });
 });

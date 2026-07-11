@@ -233,9 +233,31 @@ export async function runAgentLoop(
         workflow.state === 'INITIATED' ||
         workflow.state === 'AWAITING_GST'
       ) {
+        if (workflow.state === 'INITIATED') {
+          console.log(
+            '[runAgentLoop] fast-forwarding INITIATED -> AWAITING_GST for pending GST document'
+          );
+          await prisma.workflow.update({
+            where: { id: workflowId },
+            data: { state: 'AWAITING_GST' },
+          });
+          await writeAuditLog({
+            workflowId,
+            actor: 'system',
+            action: 'state_transition_fast_forward',
+            fromState: 'INITIATED',
+            toState: 'AWAITING_GST',
+            metadata: {
+              reasoning:
+                'Pending GST document found, skipping to AWAITING_GST before validation',
+            },
+          });
+          workflow.state = 'AWAITING_GST';
+        }
+
         plan = {
           nextWorker: 'gst_agent',
-          targetState: 'AWAITING_GST',
+          targetState: 'AWAITING_PAN',
           reasoningSummary:
             'A pending uploaded document exists for the GST step. Route it directly to gst_agent for deterministic validation.',
         };
