@@ -1,7 +1,15 @@
-import { PDFParse } from 'pdf-parse';
+import { DOMMatrix, ImageData, Path2D } from '@napi-rs/canvas';
 import { createWorker } from 'tesseract.js';
 import { getStorageProvider } from '../storage/vercelBlobProvider';
 import type { WorkerDocument } from '../agents/workers/types';
+
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  Object.assign(globalThis, {
+    DOMMatrix,
+    ImageData,
+    Path2D,
+  });
+}
 
 export type TextExtractionMethod =
   | 'PDF_TEXT'
@@ -53,11 +61,19 @@ function hasUsableText(text: string): boolean {
 async function extractPdfText(
   fileData: Buffer
 ): Promise<TextExtractionResult> {
-  const parser = new PDFParse({
-    data: new Uint8Array(fileData),
-  });
+  let parser: {
+    getText: () => Promise<{ text?: string }>;
+    destroy: () => Promise<void>;
+  } | null = null;
 
   try {
+    // Important: load pdf-parse only after DOMMatrix is available.
+    const { PDFParse } = await import('pdf-parse');
+
+    parser = new PDFParse({
+      data: new Uint8Array(fileData),
+    });
+
     const result = await parser.getText();
 
     const text = normalizeExtractedText(
@@ -93,7 +109,9 @@ async function extractPdfText(
           : 'Unknown PDF text extraction error.',
     };
   } finally {
-    await parser.destroy();
+    if (parser) {
+      await parser.destroy();
+    }
   }
 }
 
