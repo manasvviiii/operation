@@ -130,7 +130,7 @@ export function detectSignatureEvidence(
 function getLatestUnverifiedDocument(
   context: WorkerContext
 ): WorkerDocument | null {
-  const documents = [...context.documents].reverse();
+  const documents = context.documents;
 
   return (
     documents.find(

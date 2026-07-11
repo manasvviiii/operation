@@ -285,12 +285,19 @@ export async function runAgentLoop(
         }
       }
     } else if (workflow.state === 'VALIDATING' && triggerSource === 'inbound_message') {
-      plan = {
-        nextWorker: 'none',
-        targetState: 'PENDING_APPROVAL',
-        reasoningSummary: 'Deterministic routing to final validation.',
-      };
-      console.log('[runAgentLoop] overriding planner route for final validation');
+      const hasPendingDocument = documents.some(
+        (document) =>
+          !document.verified &&
+          document.validationStatus === 'pending'
+      );
+      if (!hasPendingDocument) {
+        plan = {
+          nextWorker: 'none',
+          targetState: 'PENDING_APPROVAL',
+          reasoningSummary: 'Deterministic routing to final validation.',
+        };
+        console.log('[runAgentLoop] overriding planner route for final validation');
+      }
     }
 
     if (!plan) {
@@ -405,6 +412,36 @@ export async function runAgentLoop(
           '[runAgentLoop] overriding planner route for pending agreement document:',
           pendingDocument.id
         );
+      } else if (workflow.state === 'VALIDATING') {
+        let remediationWorker = null;
+
+        if (pendingDocument.category === 'INCORPORATION_PROOF') remediationWorker = 'incorporation_agent';
+        else if (pendingDocument.category === 'VENDOR_AGREEMENT') remediationWorker = 'agreement_agent';
+        else if (pendingDocument.category === 'BANK_PROOF') remediationWorker = 'bank_agent';
+        else if (pendingDocument.category === 'GST_CERTIFICATE') remediationWorker = 'gst_agent';
+
+        if (!remediationWorker) {
+          const prerequisiteCheck = checkPrerequisites(
+            'PENDING_APPROVAL',
+            extractedFields,
+            documents.map(d => ({id: d.id, category: d.category, verified: d.verified}))
+          );
+          if (!prerequisiteCheck.passed && prerequisiteCheck.reason) {
+            if (prerequisiteCheck.reason.includes('incorporation')) remediationWorker = 'incorporation_agent';
+            else if (prerequisiteCheck.reason.includes('Vendor Agreement')) remediationWorker = 'agreement_agent';
+            else if (prerequisiteCheck.reason.includes('bank-proof')) remediationWorker = 'bank_agent';
+            else if (prerequisiteCheck.reason.includes('GST')) remediationWorker = 'gst_agent';
+          }
+        }
+
+        if (remediationWorker) {
+          plan = {
+            nextWorker: remediationWorker,
+            targetState: 'VALIDATING',
+            reasoningSummary: `Pending uploaded document routed to ${remediationWorker} for remediation in VALIDATING state.`,
+          };
+          console.log(`[runAgentLoop] overriding planner route for remediation pending document ${pendingDocument.id} -> ${remediationWorker}`);
+        }
       }
     }
 

@@ -190,7 +190,7 @@ export function extractAccountHolderName(
 function getLatestUnverifiedDocument(
   context: WorkerContext
 ): WorkerDocument | null {
-  const documents = [...context.documents].reverse();
+  const documents = context.documents;
 
   return (
     documents.find(

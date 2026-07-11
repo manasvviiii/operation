@@ -1063,4 +1063,73 @@ describe('runAgentLoop', () => {
       })
     );
   });
+
+  it('Test: VALIDATING with pending document routes to remediation worker (incorporation_agent) and not none', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'VALIDATING',
+        extractedFields: {
+          gstin: '27ABCDE1234F1Z5',
+          panNumber: 'ABCDE1234F',
+          ifsc: 'SBIN0001234',
+          accountNumber: '1234567890',
+          companyNameMatch: false,
+          incorporationCompanyName: null,
+        },
+      })
+    );
+
+    const now = Date.now();
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg1', role: 'user', content: '', createdAt: new Date(now), attachments: {} }, // Simulated attachment
+    ]);
+
+    mockPrisma.document.findMany.mockResolvedValue([
+      { id: 'doc-new-incorp', category: undefined, verified: false, validationStatus: 'pending' }, // newly uploaded pending document
+      { id: 'doc1', category: 'GST_CERTIFICATE', verified: true },
+      { id: 'doc2', category: 'BANK_PROOF', verified: true },
+      { id: 'doc3', category: 'INCORPORATION_PROOF', verified: true, validationStatus: 'failed' }, // old failed incorporation proof
+      { id: 'doc4', category: 'VENDOR_AGREEMENT', verified: true },
+    ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+      extractedData: {
+        incorporationCompanyName: 'ABC PRIVATE LIMITED',
+        companyNameMatch: true,
+        incorporationProofType: 'CERTIFICATE_OF_INCORPORATION'
+      },
+    });
+
+    await runAgentLoop('test-workflow-id', 'inbound_message');
+
+    // Planner called with override for remediation
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          output: expect.objectContaining({
+            nextWorker: 'incorporation_agent',
+            targetState: 'VALIDATING',
+          }),
+        }),
+      })
+    );
+
+    // Final state check: updates workflow fields
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'VALIDATING',
+          extractedFields: expect.objectContaining({
+            incorporationCompanyName: 'ABC PRIVATE LIMITED',
+            companyNameMatch: true,
+          }),
+        }),
+      })
+    );
+  });
 });

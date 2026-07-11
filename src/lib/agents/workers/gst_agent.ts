@@ -135,7 +135,7 @@ export function extractLegalName(
 function getLatestUnverifiedDocument(
   context: WorkerContext
 ): WorkerDocument | null {
-  const documents = [...context.documents].reverse();
+  const documents = context.documents;
 
   const document = documents.find(
     (item) =>
