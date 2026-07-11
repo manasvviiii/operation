@@ -110,50 +110,6 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
       },
     });
 
-    // Call stateMachine.validateTransition(workflow.state, plan.targetState) as a SYNTAX/LEGALITY check only
-    try {
-      validateTransition(workflow.state as any, plan.targetState);
-    } catch (transitionError) {
-      // Illegal transition proposed by planner - handle gracefully
-      console.error('[runAgentLoop] Planner proposed illegal transition:', transitionError);
-      
-      // Write AuditLog for the illegal transition
-      await writeAuditLog({
-        workflowId,
-        actor: 'system',
-        action: 'planner_proposed_illegal_transition',
-        fromState: workflow.state,
-        toState: workflow.state, // unchanged - do not advance state
-        metadata: {
-          attemptedTargetState: plan.targetState,
-          nextWorker: plan.nextWorker,
-          reasoning: plan.reasoningSummary,
-          error: transitionError instanceof Error ? transitionError.message : String(transitionError),
-        },
-      });
-
-      // Send holding message to vendor if chatId exists
-      if (workflow.chatId) {
-        console.log('[runAgentLoop] sending holding message to vendor', workflow.chatId);
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: { chatId: workflow.chatId, text: 'Thanks — we\'re finishing up validation on your details. You\'ll hear from us shortly.' },
-        });
-      }
-
-      // Update Execution to 'done' (not 'failed') - this was handled, not a crash
-      await prisma.execution.update({
-        where: { id: execution.id },
-        data: {
-          status: 'done',
-          endedAt: new Date(),
-        },
-      });
-
-      console.log('[runAgentLoop] execution marked done after illegal transition catch for workflow', workflowId);
-      return; // Exit normally, do not rethrow
-    }
-
     const workerContext = {
       workflowId: workflow.id,
       vendor: {
@@ -203,7 +159,10 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
     });
 
     if (workerResult.success === true) {
-      // Worker succeeded, proceed with transition
+      // Worker succeeded. Merge any extracted data FIRST, independent of whether the
+      // planner's proposed targetState turns out to be a legal transition — the user's
+      // submitted data (e.g. a PAN number) is real regardless of the planner's mistake,
+      // and must never be silently dropped.
       let mergedExtracted = {};
       if (workflow.extractedFields && typeof workflow.extractedFields === 'object') {
         mergedExtracted = { ...workflow.extractedFields };
@@ -212,33 +171,67 @@ export async function runAgentLoop(workflowId: string, triggerSource: string): P
         mergedExtracted = { ...mergedExtracted, ...workerResult.extractedData };
       }
 
+      // Now check transition legality (SYNTAX/LEGALITY check only). A same-state
+      // "transition" means the planner wants to stay and re-prompt — not an actual
+      // transition, so skip the graph check for that case.
+      let transitionIsLegal = plan.targetState === workflow.state;
+      if (!transitionIsLegal) {
+        try {
+          validateTransition(workflow.state as any, plan.targetState);
+          transitionIsLegal = true;
+        } catch (transitionError) {
+          console.error('[runAgentLoop] Planner proposed illegal transition:', transitionError);
+          await writeAuditLog({
+            workflowId,
+            actor: 'system',
+            action: 'planner_proposed_illegal_transition',
+            fromState: workflow.state,
+            toState: workflow.state, // unchanged - do not advance state
+            metadata: {
+              attemptedTargetState: plan.targetState,
+              nextWorker: plan.nextWorker,
+              reasoning: plan.reasoningSummary,
+              error: transitionError instanceof Error ? transitionError.message : String(transitionError),
+            },
+          });
+        }
+      }
+
+      const finalState = transitionIsLegal ? plan.targetState : workflow.state;
+
+      // Persist extractedFields regardless of transitionIsLegal — only `state` is gated.
       await prisma.workflow.update({
         where: { id: workflowId },
         data: {
-          state: plan.targetState,
+          state: finalState,
           extractedFields: mergedExtracted,
         },
       });
 
-      await writeAuditLog({
-        workflowId,
-        actor: 'system',
-        action: 'state_transition',
-        fromState: workflow.state,
-        toState: plan.targetState,
-        metadata: {
-          triggerSource,
-          reasoning: plan.reasoningSummary,
-          nextWorker: plan.nextWorker,
-        },
-      });
+      if (transitionIsLegal && plan.targetState !== workflow.state) {
+        await writeAuditLog({
+          workflowId,
+          actor: 'system',
+          action: 'state_transition',
+          fromState: workflow.state,
+          toState: plan.targetState,
+          metadata: {
+            triggerSource,
+            reasoning: plan.reasoningSummary,
+            nextWorker: plan.nextWorker,
+          },
+        });
+      }
 
+      // Send the worker's own reply — it's honest about what actually happened
+      // (e.g. "PAN number received, verifying...") regardless of whether the
+      // planner's proposed next state was legal.
       if (workerResult.outboundMessage && workflow.chatId) {
         console.log('[runAgentLoop] sending outbound telegram message to', workflow.chatId);
         await telegramConnector.execute({ operation: 'sendMessage', payload: { chatId: workflow.chatId, text: workerResult.outboundMessage } });
       }
 
-      if (plan.targetState === 'PENDING_APPROVAL') {
+      if (transitionIsLegal && plan.targetState === 'PENDING_APPROVAL') {
         await prisma.approval.create({
           data: {
             workflowId,

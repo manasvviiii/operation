@@ -30,7 +30,10 @@ export async function handleInboundUpdate(rawUpdate: any): Promise<void> {
       });
     }
   } else {
-    workflow = await prisma.workflow.findFirst({ where: { chatId } });
+    workflow = await prisma.workflow.findFirst({
+      where: { chatId },
+      orderBy: { updatedAt: 'desc' },
+    });
 
     if (!workflow) {
       await telegramConnector.execute({ operation: 'sendMessage', payload: { chatId, text: "I don't recognize this chat — please use your onboarding link to start." } });

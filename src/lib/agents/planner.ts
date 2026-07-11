@@ -1,7 +1,7 @@
 import Groq from 'groq-sdk';
 import { z } from 'zod';
 import { withRetry } from '../retry';
-import type { WorkflowState } from '../stateMachine';
+import { validateTransition, type WorkflowState } from '../stateMachine';
 
 export interface Plan {
   nextWorker: string;
@@ -92,50 +92,84 @@ export async function planNext(context: PlanContext): Promise<{ plan: Plan; toke
     2
   );
 
+  const chatMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: loadPrompt('planner', 'v1') },
+    { role: 'user', content: `Context:\n${contextData}` },
+  ];
+
   let responseText = '';
+  let totalTokensUsed = 0;
+  const MAX_ATTEMPTS = 2; // 1 initial attempt + 1 corrective retry on illegal transition
 
-  try {
-    const completion = await withRetry(
-      () =>
-        groq.chat.completions.create({
-          model: 'llama-3.3-70b-versatile',
-          messages: [
-            { role: 'system', content: loadPrompt('planner', 'v1') },
-            { role: 'user', content: `Context:\n${contextData}` },
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0.3,
-        }),
-      {
-        maxAttempts: 4,
-        baseDelayMs: 300,
-        onRetry: (attempt, err) => console.warn(`[planner] Groq call retry ${attempt}:`, err),
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const completion = await withRetry(
+        () =>
+          groq.chat.completions.create({
+            model: 'llama-3.3-70b-versatile',
+            messages: chatMessages,
+            response_format: { type: 'json_object' },
+            temperature: 0.3,
+          }),
+        {
+          maxAttempts: 4,
+          baseDelayMs: 300,
+          onRetry: (retryAttempt, err) => console.warn(`[planner] Groq call retry ${retryAttempt}:`, err),
+        }
+      );
+
+      responseText = completion.choices[0]?.message?.content ?? '';
+      totalTokensUsed += completion.usage?.total_tokens ?? 0;
+
+      const cleanedText = responseText
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .trim();
+
+      const parsedPlan = JSON.parse(cleanedText);
+      const validatedPlan = PlanSchema.parse(parsedPlan);
+
+      // The Zod schema only checks nextWorker/targetState are individually valid
+      // enum values — it doesn't know which (state -> targetState) pairs are legal
+      // edges in the state graph. Cross-check that here. A same-state "transition"
+      // (planner wants to stay and re-prompt) is always fine and skips this check.
+      if (validatedPlan.targetState !== context.workflow.state) {
+        try {
+          validateTransition(context.workflow.state as WorkflowState, validatedPlan.targetState);
+        } catch (transitionError) {
+          const message = transitionError instanceof Error ? transitionError.message : String(transitionError);
+          if (attempt < MAX_ATTEMPTS) {
+            console.warn(`[planner] Proposed illegal transition on attempt ${attempt}, retrying with corrective feedback:`, message);
+            chatMessages.push({ role: 'assistant', content: responseText });
+            chatMessages.push({
+              role: 'user',
+              content: `That plan proposed an invalid state transition: ${message}. Return a corrected JSON plan with a legal targetState for the current state.`,
+            });
+            continue;
+          }
+          // Out of retries — return the plan as-is. runAgentLoop's own legality
+          // check will catch this and keep the workflow's state unchanged, so
+          // this isn't unsafe, just not self-corrected.
+          console.error(`[planner] Still proposing illegal transition after ${MAX_ATTEMPTS} attempts, returning as-is:`, message);
+        }
       }
-    );
 
-    responseText = completion.choices[0]?.message?.content ?? '';
-    const tokensUsed = completion.usage?.total_tokens ?? 0;
-
-    const cleanedText = responseText
-      .replace(/```json\s*/g, '')
-      .replace(/```\s*/g, '')
-      .trim();
-
-    const parsedPlan = JSON.parse(cleanedText);
-    const validatedPlan = PlanSchema.parse(parsedPlan);
-
-    return { plan: validatedPlan, tokensUsed };
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      throw new Error(
-        `Plan validation failed. Model returned: ${responseText}. Validation issues: ${JSON.stringify(error.issues, null, 2)}`
-      );
+      return { plan: validatedPlan, tokensUsed: totalTokensUsed };
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new Error(
+          `Plan validation failed. Model returned: ${responseText}. Validation issues: ${JSON.stringify(error.issues, null, 2)}`
+        );
+      }
+      if (error instanceof SyntaxError) {
+        throw new Error(
+          `Failed to parse model response as JSON. Response was: ${responseText}`
+        );
+      }
+      throw error;
     }
-    if (error instanceof SyntaxError) {
-      throw new Error(
-        `Failed to parse model response as JSON. Response was: ${responseText}`
-      );
-    }
-    throw error;
   }
+
+  // Unreachable, but keeps TypeScript satisfied
+  throw new Error('[planner] planNext exhausted attempts without returning a plan');
 }

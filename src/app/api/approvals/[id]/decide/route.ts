@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { prisma } from '@/lib/prisma';
 import { validateTransition } from '@/lib/stateMachine';
 import { writeAuditLog } from '@/lib/auditLog';
@@ -85,9 +86,17 @@ export async function POST(
         },
       });
 
-      runAgentLoop(approval.workflowId, 'approval_decided').catch((err) => {
-        console.error('Error running agent loop after approval decision:', err);
-      });
+      // IMPORTANT: this must stay alive after the response is sent. On Vercel,
+      // a plain un-awaited promise can be killed the instant the response returns
+      // (the function's execution context isn't guaranteed to persist). waitUntil()
+      // tells the runtime to keep this invocation alive until the promise settles,
+      // so runAgentLoop (and the ERP write + final Telegram message it triggers)
+      // reliably completes even though we don't want the HTTP response to wait for it.
+      waitUntil(
+        runAgentLoop(approval.workflowId, 'approval_decided').catch((err) => {
+          console.error('Error running agent loop after approval decision:', err);
+        })
+      );
     } else {
       const currentState = approval.workflow.state;
       const targetState = 'PAUSED';
