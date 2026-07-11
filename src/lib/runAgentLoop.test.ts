@@ -901,4 +901,57 @@ describe('runAgentLoop', () => {
       })
     );
   });
+
+  it('Test: Integration regression with timestamp-ordered messages for PAN extraction', async () => {
+    mockPrisma.workflow.findUnique.mockResolvedValue(
+      createWorkflow({
+        state: 'AWAITING_PAN',
+        extractedFields: { gstin: '27ABCDE1234F1Z5' },
+      })
+    );
+
+    const now = Date.now();
+
+    mockPrisma.message.findMany.mockResolvedValue([
+      { id: 'msg4', role: 'user', content: 'ABCDE1234F', createdAt: new Date(now) },
+      { id: 'msg3', role: 'assistant', content: 'Please share PAN', createdAt: new Date(now - 1000) },
+      { id: 'msg2', role: 'user', content: 'continue', createdAt: new Date(now - 2000) },
+      { id: 'msg1', role: 'user', content: 'AAAAA9999A', createdAt: new Date(now - 5000) }, // old valid PAN but not latest
+    ]);
+
+    mockDispatchWorker.mockResolvedValue({
+      success: true,
+      validationPassed: true,
+      extractedData: { panNumber: 'ABCDE1234F' },
+    });
+
+    await runAgentLoop('test-workflow-id', 'inbound_message');
+
+    // Planner called with override
+    expect(mockPrisma.agentRun.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          agentName: 'planner',
+          output: expect.objectContaining({
+            nextWorker: 'pan_agent',
+            targetState: 'AWAITING_BANK',
+          }),
+        }),
+      })
+    );
+
+    // Final state check
+    expect(mockPrisma.workflow.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'test-workflow-id' },
+        data: expect.objectContaining({
+          state: 'AWAITING_BANK',
+          extractedFields: expect.objectContaining({
+            gstin: '27ABCDE1234F1Z5',
+            panNumber: 'ABCDE1234F',
+          }),
+        }),
+      })
+    );
+  });
 });

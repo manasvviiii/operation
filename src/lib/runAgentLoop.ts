@@ -13,7 +13,7 @@ import type {
 } from './agents/workers/types';
 import { TelegramConnector } from './connectors/telegramConnector';
 import { checkPrerequisites } from './validation/prerequisiteGuard';
-import { extractPan } from './agents/workers/pan_agent';
+import { extractPan, getLatestUserMessage } from './agents/workers/pan_agent';
 
 function toJsonValue(
   value: unknown
@@ -256,12 +256,44 @@ export async function runAgentLoop(
       context.workflow.state
     );
 
-    const planResult = await planNext(context);
+    let plan: any = null;
+    let tokensUsed = 0;
 
-    let plan =
-      'plan' in planResult
-        ? planResult.plan
-        : planResult;
+    /*
+     * TEXT ROUTING OVERRIDE (Executes BEFORE planner dispatch)
+     */
+    if (workflow.state === 'AWAITING_PAN' && triggerSource === 'inbound_message') {
+      const latestUserMessageContent = getLatestUserMessage(context.messages);
+
+      console.log('[PAN DEBUG] workflow state:', workflow.state);
+      console.log('[PAN DEBUG] trigger:', triggerSource);
+      console.log('[PAN DEBUG] messages count:', context.messages.length);
+      console.log('[PAN DEBUG] latest user message:', latestUserMessageContent);
+
+      if (latestUserMessageContent) {
+        const pan = extractPan(latestUserMessageContent);
+        console.log('[PAN DEBUG] extracted PAN:', pan);
+
+        if (pan) {
+          plan = {
+            nextWorker: 'pan_agent',
+            targetState: 'AWAITING_BANK',
+            reasoningSummary:
+              'A valid PAN was found in the latest user message. Route directly to pan_agent for deterministic validation.',
+          };
+          console.log('[runAgentLoop] overriding planner route for valid PAN text');
+        }
+      }
+    }
+
+    if (!plan) {
+      const planResult = await planNext(context);
+      plan = 'plan' in planResult ? planResult.plan : planResult;
+      tokensUsed =
+        'tokensUsed' in planResult && typeof planResult.tokensUsed === 'number'
+          ? planResult.tokensUsed
+          : 0;
+    }
 
     /*
      * DOCUMENT ROUTING OVERRIDE
@@ -367,34 +399,7 @@ export async function runAgentLoop(
           pendingDocument.id
         );
       }
-    } else {
-      /*
-       * TEXT ROUTING OVERRIDE
-       */
-      const latestUserMessage = messages.find((m) => m.role === 'user');
-      
-      if (workflow.state === 'AWAITING_PAN' && latestUserMessage) {
-        const pan = extractPan(latestUserMessage.content);
-        if (pan) {
-          plan = {
-            nextWorker: 'pan_agent',
-            targetState: 'AWAITING_BANK',
-            reasoningSummary:
-              'A valid PAN was found in the latest user message. Route directly to pan_agent for deterministic validation.',
-          };
-
-          console.log(
-            '[runAgentLoop] overriding planner route for valid PAN text'
-          );
-        }
-      }
     }
-
-    const tokensUsed =
-      'tokensUsed' in planResult &&
-      typeof planResult.tokensUsed === 'number'
-        ? planResult.tokensUsed
-        : 0;
 
     console.log(
       '[runAgentLoop] plan received:',
