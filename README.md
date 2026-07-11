@@ -1,165 +1,494 @@
-# Operations OS — Vendor Onboarding Workflow
+# Operations OS --- AI Vendor Onboarding
 
-An AI-agent-driven vendor onboarding system. A vendor is guided through document, GST, PAN, and bank-detail collection over Telegram, with an LLM planner orchestrating which step runs next, a human approval gate before ERP write-back, and a dashboard for visibility into every workflow's state.
+Operations OS is a guided vendor onboarding system that combines a
+Telegram assistant, deterministic document validation, human approval,
+and ERP-style vendor creation.
 
-## How it works
+The workflow collects and validates vendor documents step by step,
+prevents skipped prerequisites, routes completed packets to a human
+approval dashboard, and generates a vendor code only after approval.
 
-1. An internal user creates a vendor + workflow (`scripts/newWorkflow.ts`) and gets a Telegram deep link.
-2. The vendor taps the link and chats with the bot. Every inbound message is normalized, matched to its workflow, and handed to an **agent loop**.
-3. The agent loop calls a **planner** (Groq/Llama, via `planner.ts`) to decide the next state and which worker agent should run.
-4. A **worker agent** (`gst_agent`, `pan_agent`, `bank_agent`, `doc_agent`, or `erp_agent`) processes the input, extracts structured data, and replies to the vendor.
-5. Once all required data is collected, the workflow enters `PENDING_APPROVAL` and waits for a human reviewer on the dashboard.
-6. On approval, the workflow moves to `WRITING_ERP`, the `erp_agent` writes the vendor record to the ERP system, and the workflow reaches `COMPLETED`.
+## Features
 
-Every planner decision, worker run, and state transition is recorded (`Execution`, `AgentRun`, `AuditLog`) for traceability.
+-   Telegram-based guided vendor onboarding
+-   Sequential state-machine workflow
+-   GST certificate upload and GSTIN validation
+-   PAN format and document validation
+-   Bank proof validation with IFSC and account details extraction
+-   Company incorporation proof validation
+-   GST and incorporation company-name consistency checks
+-   Signed Vendor Agreement classification and signature evidence
+    detection
+-   PDF text extraction and image OCR
+-   Vercel Blob document storage
+-   MIME type and file-size validation
+-   SHA-256 document checksums
+-   Duplicate document protection
+-   Out-of-order PAN handling
+-   Deterministic prerequisite guards
+-   Human-only dashboard approval
+-   Idempotent ERP/vendor creation
+-   Retry-safe vendor code generation
+-   Telegram status notifications
+-   COMPLETED terminal-state protection
+-   Audit logs, executions, and agent-run persistence
+
+## Workflow
+
+``` text
+INITIATED
+    ↓
+AWAITING_GST
+    ↓
+AWAITING_PAN
+    ↓
+AWAITING_BANK
+    ↓
+AWAITING_INCORPORATION
+    ↓
+AWAITING_AGREEMENT
+    ↓
+VALIDATING
+    ↓
+PENDING_APPROVAL
+    ↓
+WRITING_ERP
+    ↓
+COMPLETED
+```
+
+`FAILED` and `CANCELLED` are terminal states. `PAUSED` is used by the
+current rejection flow.
+
+`COMPLETED` is also terminal. Messages received after completion do not
+restart the planner or request documents again.
+
+## Onboarding Flow
+
+1.  The vendor opens the Telegram onboarding link and starts the bot.
+2.  The bot requests a GST registration certificate.
+3.  The GST document is stored and validated.
+4.  The bot requests PAN details or a supported PAN document.
+5.  PAN format is validated.
+6.  The bot requests cancelled-cheque or bank confirmation proof.
+7.  IFSC, account number, and available account-holder details are
+    validated.
+8.  The bot requests company incorporation proof.
+9.  The incorporation document is classified and the company name is
+    compared with GST evidence.
+10. The bot requests the signed Vendor Agreement.
+11. The agreement is classified and checked for signed/signature
+    evidence.
+12. The workflow enters `PENDING_APPROVAL`.
+13. A human reviews and decides from the dashboard/API approval flow.
+14. On approval, the ERP worker creates or updates the vendor record and
+    assigns a vendor code.
+15. The workflow reaches `COMPLETED` and Telegram sends the completion
+    message.
+
+## Document Validation
+
+Uploaded files are validated before workflow progression.
+
+Supported MIME types:
+
+-   `application/pdf`
+-   `image/jpeg`
+-   `image/png`
+-   `image/webp`
+
+Maximum file size:
+
+``` text
+10 MB
+```
+
+Document ingestion records metadata including:
+
+-   original filename
+-   file size
+-   MIME type
+-   SHA-256 checksum
+-   storage URL
+-   Telegram file identifiers
+-   validation status
+-   extracted fields
+-   confidence score
+-   document category
+
+The application stores documents in Vercel Blob and keeps references and
+metadata in PostgreSQL through Prisma.
+
+## Validation Rules
+
+### GST Certificate
+
+The GST worker requires a real uploaded document. It validates readable
+text, GST-certificate indicators, GSTIN extraction, and GSTIN format.
+
+### PAN
+
+PAN values follow:
+
+``` text
+AAAAA9999A
+```
+
+Example test value:
+
+``` text
+ABCDE1234F
+```
+
+### Bank Proof
+
+Bank validation expects cancelled-cheque or bank-proof evidence and
+validates available banking fields such as account number and IFSC.
+
+IFSC format follows:
+
+``` text
+AAAA0XXXXXX
+```
+
+### Incorporation Proof
+
+The incorporation worker uses deterministic indicators such as:
+
+-   Certificate of Incorporation
+-   Ministry of Corporate Affairs
+-   Registrar of Companies
+-   Companies Act
+-   Corporate Identity Number
+-   CIN
+-   Date of Incorporation
+-   Registered Office
+
+The extracted company name is safely normalized and compared with GST
+company-name evidence. Common suffix variants such as `PRIVATE LIMITED`,
+`PVT LTD`, and `PVT. LTD.` are normalized without broad fuzzy matching.
+
+### Vendor Agreement
+
+The agreement worker requires a real uploaded document and uses
+deterministic agreement indicators. It also checks for signed/signature
+evidence such as:
+
+-   SIGNED
+-   SIGNATURE
+-   AUTHORIZED SIGNATORY
+-   AUTHORISED SIGNATORY
+-   DIGITALLY SIGNED
+-   E-SIGNED
+-   ELECTRONICALLY SIGNED
+-   `/s/`
+
+An agreement that appears valid but unsigned does not pass validation.
+
+## Human Approval
+
+The Telegram bot cannot approve vendors.
+
+Approval decisions are handled through the dashboard/API approval flow.
+While a workflow is in `PENDING_APPROVAL`, normal inbound Telegram
+messages do not restart the planner or rerun document workers.
+
+On approval:
+
+``` text
+PENDING_APPROVAL → WRITING_ERP → COMPLETED
+```
+
+On rejection, the current implementation moves the workflow to `PAUSED`
+and sends a non-technical procurement-contact message to the vendor.
+
+## ERP and Vendor Code
+
+The ERP worker is protected by an explicit approval guard. It requires
+an `APPROVED` approval record before ERP execution.
+
+Vendor creation is idempotent. Retries reuse the existing vendor code
+instead of creating duplicate vendor records or allocating a new code.
+
+The current vendor-code format is deterministic and based on the vendor
+identity:
+
+``` text
+ABC-VND-<VENDOR_ID_SLICE>
+```
+
+Example completion message:
+
+``` text
+Vendor onboarding complete. Your vendor code is <VENDOR_CODE>. Welcome aboard.
+```
 
 ## Architecture
 
-```
-Telegram ──▶ /api/webhook/telegram (production)
-         or  scripts/dev-poll.ts   (local dev, long-polling)
-                    │
-                    ▼
-           inboundHandler.ts  ── resolves chatId/workflowId → workflow
-                    │
-                    ▼
-            runAgentLoop.ts   ── orchestrates one planning + worker cycle
-                    │
-        ┌───────────┴────────────┐
-        ▼                        ▼
-   planner.ts               agents/workers/*.ts
-  (Groq LLM, validates      (doc, gst, pan, bank, erp —
-   against state machine)    all mocked except erp_agent)
-                    │
-                    ▼
-              Prisma / Neon Postgres
-```
-
-**State machine:** `INITIATED → AWAITING_GST → AWAITING_PAN → AWAITING_BANK → VALIDATING → PENDING_APPROVAL → WRITING_ERP → COMPLETED`, with `FAILED` / `CANCELLED` / `PAUSED` reachable from most states. Legal transitions are enforced by `stateMachine.ts` and checked both by the planner (self-correcting) and by `runAgentLoop.ts` (hard backstop).
-
-**Delivery channel:** Telegram, via webhook in production (`src/app/api/webhook/telegram/route.ts`) or long-polling locally (`scripts/dev-poll.ts`). Only one mode can be active at a time — registering a webhook with Telegram disables `getUpdates` polling.
-
-## Requirements
-
-- Node.js
-- A [Neon](https://neon.tech) Postgres database (or any Postgres reachable via `DATABASE_URL`)
-- A Telegram bot token ([@BotFather](https://t.me/BotFather))
-- A [Groq](https://groq.com) API key (planner LLM)
-
-## Environment variables
-
-Create a `.env` file:
-
-```
-DATABASE_URL=postgresql://...
-TELEGRAM_BOT_TOKEN=...
-GROQ_API_KEY=...
+``` text
+Telegram
+   ↓
+Inbound Handler
+   ↓
+Message + Attachment Persistence
+   ↓
+Document Ingestion
+   ├── MIME / size validation
+   ├── SHA-256 checksum
+   └── Vercel Blob storage
+   ↓
+Agent Loop
+   ├── Terminal-state guards
+   ├── Planner
+   ├── Worker Registry
+   ├── Validation hard gate
+   ├── Prerequisite Guard
+   └── State Machine
+   ↓
+Document Workers
+   ├── GST Agent
+   ├── PAN Agent
+   ├── Bank Agent
+   ├── Incorporation Agent
+   └── Agreement Agent
+   ↓
+Human Approval
+   ↓
+ERP Agent
+   ↓
+COMPLETED
 ```
 
-Set the same variables in your deployment platform's environment settings (e.g. Vercel Project → Settings → Environment Variables) — a local `.env` is not read in production.
+## Tech Stack
 
-## Local development
+-   Next.js 16
+-   React 19
+-   TypeScript
+-   Prisma 7
+-   PostgreSQL / Neon
+-   Vercel Blob
+-   Telegram Bot API
+-   Tesseract.js
+-   pdf-parse
+-   Zod
+-   Vitest
+-   OpenAI SDK
+-   Anthropic SDK
+-   Google Generative AI SDK
+-   Groq SDK
 
-Install dependencies and generate the Prisma client:
+## Project Structure
 
-```bash
+``` text
+operations-os/
+├── prisma/
+│   ├── schema.prisma
+│   └── seed.ts
+├── prompts/
+│   └── planner/
+│       └── v1.md
+├── public/
+├── scripts/
+├── src/
+│   ├── app/
+│   │   └── api/
+│   └── lib/
+│       ├── agents/
+│       │   ├── planner.ts
+│       │   └── workers/
+│       │       ├── gst_agent.ts
+│       │       ├── pan_agent.ts
+│       │       ├── bank_agent.ts
+│       │       ├── incorporation_agent.ts
+│       │       ├── agreement_agent.ts
+│       │       └── erp_agent.ts
+│       ├── connectors/
+│       ├── document/
+│       │   ├── ingestion.ts
+│       │   └── textExtraction.ts
+│       ├── storage/
+│       ├── validation/
+│       │   └── prerequisiteGuard.ts
+│       ├── inboundHandler.ts
+│       ├── prisma.ts
+│       ├── runAgentLoop.ts
+│       └── stateMachine.ts
+├── AGENTS.md
+├── CLAUDE.md
+├── DECISIONS.md
+├── LIMITATIONS.md
+├── package.json
+└── README.md
+```
+
+## Local Setup
+
+### 1. Clone the repository
+
+``` bash
+git clone <YOUR_REPOSITORY_URL>
+cd operations-os
+```
+
+### 2. Install dependencies
+
+``` bash
 npm install
+```
+
+### 3. Configure environment variables
+
+Create `.env` from `.env.example`.
+
+``` bash
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+``` powershell
+Copy-Item .env.example .env
+```
+
+Configure the environment variables required by the project. Use
+`.env.example` as the source of truth for variable names.
+
+Do not commit `.env` or production secrets.
+
+### 4. Generate Prisma Client
+
+``` bash
 npx prisma generate
 ```
 
-Apply the schema to your database:
+### 5. Synchronize the database for development
 
-```bash
+``` bash
 npx prisma db push
 ```
 
-Start the Next.js dashboard:
+Use the project's deployment/database process for production
+environments. Do not blindly apply destructive schema changes to
+production.
 
-```bash
+### 6. Run the development server
+
+``` bash
 npm run dev
 ```
 
-In a **separate terminal**, start the Telegram long-poller (local dev only — do not run this alongside a registered webhook):
+Open:
 
-```bash
-npx tsx scripts/dev-poll.ts
+``` text
+http://localhost:3000
 ```
 
-Create a test vendor + workflow:
+## Verification
 
-```bash
-npx tsx scripts/newWorkflow.ts "Vendor Legal Name"
+Run TypeScript validation:
+
+``` bash
+npx tsc --noEmit
 ```
 
-This prints a Telegram deep link (`https://t.me/<bot_username>?start=<workflow-id>`) — tap it to begin onboarding.
+Run the test suite:
 
-### Resetting test data
-
-```bash
-npx tsx scripts/clearAll.ts
+``` bash
+npx vitest run
 ```
 
-Deletes all `Vendor`, `Workflow`, `Message`, `Execution`, `AgentRun`, `Approval`, `AuditLog`, and `Document` rows. Irrevocable — intended for dev/test databases only.
+Run the production build:
 
-## Testing
-
-```bash
-npx vitest
+``` bash
+npm run build
 ```
 
-Worker agents are unit-tested against mocked inputs (`workers.test.ts`); the approvals API route has its own test file.
+Current verified project baseline after Phase 7:
 
-## Deployment (Vercel)
-
-1. Set all required env vars in the Vercel dashboard.
-2. Push to the connected Git branch, or run `vercel --prod`.
-3. Register the Telegram webhook against your deployed URL:
-   ```
-   https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-app>.vercel.app/api/webhook/telegram
-   ```
-4. Stop running `scripts/dev-poll.ts` once the webhook is registered.
-
-`next.config.ts` explicitly bundles the `prompts/` directory (via `outputFileTracingIncludes`) since the planner reads prompt files off disk at runtime and Vercel's function bundler doesn't trace that automatically.
-
-## Known limitations (mocked / demo scope)
-
-- `doc_agent`, `gst_agent`, `pan_agent`, and `bank_agent` are **mocks** — they extract data with regexes and never call a real verification service (NSDL, GST portal, bank penny-drop API, OCR). Only `erp_agent` calls a real connector (`ErpConnector`).
-- Document detection (`doc_agent`) checks for the literal word `"attachment"` in message text — it does not inspect real Telegram file/photo uploads.
-- The planner is an LLM and is not guaranteed correct on every call; `runAgentLoop.ts` and `planner.ts` both include safeguards (self-correcting retries, and a hard backstop that never advances state on an illegal transition or drops extracted data), but a wrong `nextWorker` choice can still occasionally produce a redundant re-prompt.
-- The webhook route always returns `{ ok: true }` to Telegram even if processing throws internally — failures are visible only in server logs, not to the vendor or via a Telegram retry.
-
-## Project structure
-
+``` text
+183 tests passed
+0 tests failed
+TypeScript: 0 errors
+Production build: successful
 ```
-src/
-  app/
-    api/
-      webhook/telegram/route.ts       # Telegram webhook receiver (production)
-      approvals/[id]/decide/route.ts  # Human approval decision endpoint
-    dashboard/                        # Workflow visibility UI
-  lib/
-    inboundHandler.ts                 # Resolves chatId/workflowId → workflow, logs message
-    runAgentLoop.ts                   # Core orchestration: plan → dispatch worker → transition
-    stateMachine.ts                   # Legal state transition graph
-    connectors/
-      telegram.ts                    # normalizeUpdate, sendMessage, bot instance
-      telegramConnector.ts           # Connector interface implementation
-      erpConnector.ts                # Real ERP integration
-    agents/
-      planner.ts                     # LLM-based next-step planner
-      workers/
-        doc_agent.ts
-        gst_agent.ts
-        pan_agent.ts
-        bank_agent.ts
-        erp_agent.ts
-        index.ts                     # Worker registry + dispatch
-prompts/
-  planner/v1.md                       # Planner system prompt
-scripts/
-  dev-poll.ts                         # Local Telegram long-polling (dev only)
-  newWorkflow.ts                      # Create a test vendor + workflow
-  clearAll.ts                         # Wipe all workflow data (dev only)
-prisma/
-  schema.prisma                       # Vendor, Workflow, Message, Execution, AgentRun, Approval, AuditLog, Document
-```
+
+## Deployment
+
+The application is designed for deployment on Vercel with Neon
+PostgreSQL and Vercel Blob.
+
+Before deployment:
+
+1.  Add all required environment variables to the Vercel project.
+2.  Confirm `DATABASE_URL` points to the intended Neon database.
+3.  Confirm the database schema includes the latest Prisma fields and
+    workflow states.
+4.  Confirm Vercel Blob credentials/configuration are available.
+5.  Configure the Telegram webhook to the deployed application endpoint
+    used by this project.
+6.  Run `npx tsc --noEmit`.
+7.  Run `npx vitest run`.
+8.  Run `npm run build`.
+
+## Demo Checklist
+
+Use individual documents for the normal guided happy-path demo.
+
+1.  Start the Telegram onboarding workflow.
+2.  Upload a GST certificate PDF or image.
+3.  Submit a valid PAN.
+4.  Upload cancelled-cheque or bank proof.
+5.  Upload incorporation proof with a company name consistent with GST
+    evidence.
+6.  Upload a signed Vendor Agreement.
+7.  Confirm the workflow reaches `PENDING_APPROVAL`.
+8.  Approve the vendor from the dashboard.
+9.  Confirm vendor-code creation.
+10. Confirm the Telegram completion message.
+11. Send another Telegram message and verify the completed workflow does
+    not restart.
+
+## Current Limitation
+
+A single combined PDF containing GST, PAN, bank proof, incorporation
+proof, and the Vendor Agreement is not automatically split into five
+logical documents.
+
+The current workflow is designed for guided sequential uploads of
+individual onboarding documents.
+
+See `LIMITATIONS.md` for additional documented limitations.
+
+## Design Decisions
+
+Important architectural decisions are documented in `DECISIONS.md`,
+including:
+
+-   object-storage abstraction
+-   deterministic document validation
+-   validation hard gates
+-   prerequisite guards
+-   company-name consistency
+-   signed-agreement validation
+-   dashboard-only human approval
+-   idempotent ERP creation
+-   deterministic vendor-code reuse
+-   terminal `COMPLETED` behavior
+
+## Security Notes
+
+-   Uploaded files are restricted by MIME type and size.
+-   Filenames are sanitized before storage.
+-   SHA-256 checksums are calculated during ingestion.
+-   Duplicate workflow documents can be detected by checksum.
+-   Document contents are stored in object storage instead of long-lived
+    application memory.
+-   ERP execution requires explicit approved human-review evidence.
+-   Planner output cannot bypass deterministic prerequisite guards.
+-   Secrets must remain in environment variables and must never be
+    committed.
+
+## License
+
+This project was developed as an assignment/demo implementation. Add the
+appropriate license before public or commercial distribution.
