@@ -25,6 +25,8 @@ type WorkflowDetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+export const dynamic = 'force-dynamic';
+
 export default async function WorkflowDetailPage({ params }: WorkflowDetailPageProps) {
   const { id } = await params;
 
@@ -32,6 +34,15 @@ export default async function WorkflowDetailPage({ params }: WorkflowDetailPageP
     where: { id },
     include: { vendor: true },
   });
+
+  if (workflow) {
+    console.log(`[DASHBOARD STATE DEBUG] source=detail`);
+    console.log(`[DASHBOARD STATE DEBUG] workflowId=${workflow.id}`);
+    console.log(`[DASHBOARD STATE DEBUG] prismaState=${workflow.state}`);
+    console.log(`[DASHBOARD STATE DEBUG] returnedState=${workflow.state}`);
+    console.log(`[DASHBOARD STATE DEBUG] component=WorkflowDetailPage`);
+    console.log(`[DASHBOARD STATE DEBUG] renderedState=${workflow.state}`);
+  }
 
   if (!workflow) {
     return (

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+}));
+
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     approval: {
@@ -136,6 +140,9 @@ describe('POST /api/approvals/[id]/decide', () => {
         toState: 'WRITING_ERP',
       })
     );
+
+    const { revalidatePath } = await import('next/cache');
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard', 'layout');
 
     expect(res.status).toBe(200);
   });

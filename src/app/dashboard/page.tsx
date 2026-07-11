@@ -19,10 +19,21 @@ function timeAgo(date: Date): string {
   return Math.floor(seconds) + 's ago';
 }
 
+export const dynamic = 'force-dynamic';
+
 export default async function DashboardPage() {
   const workflows = await prisma.workflow.findMany({
     include: { vendor: true },
     orderBy: { updatedAt: 'desc' },
+  });
+
+  workflows.forEach(w => {
+    console.log(`[DASHBOARD STATE DEBUG] source=list`);
+    console.log(`[DASHBOARD STATE DEBUG] workflowId=${w.id}`);
+    console.log(`[DASHBOARD STATE DEBUG] prismaState=${w.state}`);
+    console.log(`[DASHBOARD STATE DEBUG] returnedState=${w.state}`);
+    console.log(`[DASHBOARD STATE DEBUG] component=DashboardPage`);
+    console.log(`[DASHBOARD STATE DEBUG] renderedState=${w.state}`);
   });
 
   const total = workflows.length;

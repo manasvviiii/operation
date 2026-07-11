@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { waitUntil } from '@vercel/functions';
 import { prisma } from '@/lib/prisma';
 import { validateTransition } from '@/lib/stateMachine';
@@ -140,6 +141,9 @@ export async function POST(
         });
       }
     }
+
+    // Invalidate dashboard caches so navigation shows fresh data
+    revalidatePath('/dashboard', 'layout');
 
     return NextResponse.json({ success: true, approval: updatedApproval });
   } catch (error) {
