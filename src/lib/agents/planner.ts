@@ -76,7 +76,15 @@ export function loadPrompt(agentName: string, version: string): string {
   return promptText;
 }
 
-export async function planNext(context: PlanContext): Promise<{ plan: Plan; tokensUsed: number }> {
+export async function planNext(context: PlanContext): Promise<{ 
+  plan: Plan; 
+  tokensUsed: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  estimatedCost: number | null;
+  promptVersion: string | null;
+}> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     throw new Error('GROQ_API_KEY is not set in environment variables');
@@ -101,6 +109,10 @@ export async function planNext(context: PlanContext): Promise<{ plan: Plan; toke
   ];
 
   let responseText = '';
+  let promptTokens: number | null = null;
+  let completionTokens: number | null = null;
+  let totalTokens: number | null = null;
+  let estimatedCost: number | null = null;
   let totalTokensUsed = 0;
   const MAX_ATTEMPTS = 2; // 1 initial attempt + 1 corrective retry on illegal transition
 
@@ -138,7 +150,14 @@ export async function planNext(context: PlanContext): Promise<{ plan: Plan; toke
       );
 
       responseText = completion.choices[0]?.message?.content ?? '';
-      totalTokensUsed += completion.usage?.total_tokens ?? 0;
+      
+      promptTokens = completion.usage?.prompt_tokens ?? null;
+      completionTokens = completion.usage?.completion_tokens ?? null;
+      totalTokens = completion.usage?.total_tokens ?? null;
+      totalTokensUsed += totalTokens ?? 0;
+      
+      // Estimated cost is disabled unless provided by an explicit pricing registry
+      estimatedCost = null;
 
       const cleanedText = responseText
         .replace(/```json\s*/g, '')
@@ -173,7 +192,15 @@ export async function planNext(context: PlanContext): Promise<{ plan: Plan; toke
         }
       }
 
-      return { plan: validatedPlan, tokensUsed: totalTokensUsed };
+      return { 
+        plan: validatedPlan, 
+        tokensUsed: totalTokensUsed,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        estimatedCost,
+        promptVersion: 'v1'
+      };
     } catch (error) {
       if (error instanceof z.ZodError) {
         throw new Error(

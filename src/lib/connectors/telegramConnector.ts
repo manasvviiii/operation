@@ -9,7 +9,19 @@ export class TelegramConnector implements Connector {
   kind = 'telegram';
 
   async sendMessage(input: NormalizedOutboundMessage): Promise<ConnectorResponse> {
+    const startTime = Date.now();
+    const workflowId = input.workflowId ?? input.channelId;
+    
     try {
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'CONNECTOR_CALL_STARTED',
+        status: 'pending',
+        agentName: 'telegramConnector',
+        toolName: 'sendMessage',
+        input: { operation: 'sendMessage', connectorId: 'telegram' },
+      }).catch(() => {});
+
       await withRetry(
         async () => {
           await sendMessage(input.channelId, input.text);
@@ -44,9 +56,33 @@ export class TelegramConnector implements Connector {
           }
         }
       );
+      
+      const latencyMs = Date.now() - startTime;
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'CONNECTOR_CALL_COMPLETED',
+        status: 'success',
+        agentName: 'telegramConnector',
+        toolName: 'sendMessage',
+        latencyMs,
+      }).catch(() => {});
+
       return { success: true };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
+      const latencyMs = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      await appendAgentEvent({
+        workflowId,
+        eventType: 'CONNECTOR_CALL_FAILED',
+        status: 'failed',
+        agentName: 'telegramConnector',
+        toolName: 'sendMessage',
+        latencyMs,
+        error: errorMessage,
+      }).catch(() => {});
+      
+      return { success: false, error: errorMessage };
     }
   }
 

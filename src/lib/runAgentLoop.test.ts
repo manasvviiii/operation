@@ -272,6 +272,7 @@ describe('runAgentLoop', () => {
       'WORKER_RESULT',
       'VALIDATION_PASSED',
       'STATE_TRANSITION',
+      'APPROVAL_REQUESTED',
       'LOOP_COMPLETED'
     ]);
 

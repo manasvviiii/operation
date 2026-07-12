@@ -354,14 +354,24 @@ export async function runAgentLoop(
       });
     }
 
+    let promptTokens: number | null = null;
+    let completionTokens: number | null = null;
+    let totalTokens: number | null = null;
+    let estimatedCost: number | null = null;
+    let promptVersion: string | null = null;
+
     if (!plan) {
       const planResult = await planNext(context);
       plan = 'plan' in planResult ? planResult.plan : planResult;
-      tokensUsed =
-        'tokensUsed' in planResult && typeof planResult.tokensUsed === 'number'
-          ? planResult.tokensUsed
-          : 0;
-          
+      tokensUsed = 'tokensUsed' in planResult && typeof planResult.tokensUsed === 'number' ? planResult.tokensUsed : 0;
+      
+      if ('promptTokens' in planResult) {
+        promptTokens = planResult.promptTokens;
+        completionTokens = planResult.completionTokens;
+        totalTokens = planResult.totalTokens;
+        estimatedCost = planResult.estimatedCost;
+        promptVersion = planResult.promptVersion;
+      }
       await appendAgentEvent({
         workflowId,
         eventType: 'PLAN_CREATED',
@@ -372,6 +382,11 @@ export async function runAgentLoop(
         stateAfter: plan.targetState,
         output: plan,
         reasoningSummary: plan.reasoningSummary,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        estimatedCost,
+        promptVersion,
       });
     }
 
@@ -985,6 +1000,16 @@ export async function runAgentLoop(
             step: workflow.currentStep,
             decision: 'PENDING',
           },
+        });
+        
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'APPROVAL_REQUESTED',
+          status: 'success',
+          agentName: 'system',
+          stateBefore: workflow.state,
+          stateAfter: 'PENDING_APPROVAL',
+          reasoningSummary: 'Human approval has been requested for this step',
         });
       }
     }

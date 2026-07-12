@@ -20,6 +20,11 @@ export type AppendAgentEventParams = {
   maxAttempts?: number | null;
   backoffMs?: number | null;
   taxonomy?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+  estimatedCost?: number | null;
+  promptVersion?: string | null;
 };
 
 export async function appendAgentEvent(data: AppendAgentEventParams): Promise<void> {
@@ -58,6 +63,11 @@ export async function appendAgentEvent(data: AppendAgentEventParams): Promise<vo
             maxAttempts: data.maxAttempts ?? null,
             backoffMs: data.backoffMs ?? null,
             taxonomy: data.taxonomy ?? null,
+            promptTokens: data.promptTokens ?? null,
+            completionTokens: data.completionTokens ?? null,
+            totalTokens: data.totalTokens ?? null,
+            estimatedCost: data.estimatedCost ?? null,
+            promptVersion: data.promptVersion ?? null,
           },
         });
       });

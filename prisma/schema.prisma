@@ -182,6 +182,11 @@ model AgentEvent {
   maxAttempts      Int?
   backoffMs        Int?
   taxonomy         String?
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  estimatedCost    Float?
+  promptVersion    String?
   createdAt        DateTime @default(now())
 
   @@unique([workflowId, sequenceNumber])

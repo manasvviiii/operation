@@ -4,7 +4,7 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-vi.mock('@/lib/prisma', () => ({
+vi.mock('../../../../../lib/prisma', () => ({
   prisma: {
     approval: {
       findUnique: vi.fn(),
@@ -16,29 +16,29 @@ vi.mock('@/lib/prisma', () => ({
   },
 }));
 
-vi.mock('@/lib/stateMachine', () => ({
+vi.mock('../../../../../lib/stateMachine', () => ({
   validateTransition: vi.fn(),
 }));
 
-vi.mock('@/lib/auditLog', () => ({
+vi.mock('../../../../../lib/auditLog', () => ({
   writeAuditLog: vi.fn(),
 }));
 
 const mockRunAgentLoop = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/lib/runAgentLoop', () => ({
+vi.mock('../../../../../lib/runAgentLoop', () => ({
   runAgentLoop: (...args: any[]) => mockRunAgentLoop(...args),
 }));
 
 const mockSendMessage = vi.fn().mockResolvedValue({ success: true });
-vi.mock('@/lib/connectors/registry', () => ({
+vi.mock('../../../../../lib/connectors/registry', () => ({
   getConnector: vi.fn(() => ({
     sendMessage: mockSendMessage,
   })),
 }));
 
-import { prisma } from '@/lib/prisma';
-import { validateTransition } from '@/lib/stateMachine';
-import { writeAuditLog } from '@/lib/auditLog';
+import { prisma } from '../../../../../lib/prisma';
+import { validateTransition } from '../../../../../lib/stateMachine';
+import { writeAuditLog } from '../../../../../lib/auditLog';
 import { POST } from './route';
 
 const mockPrisma = prisma as any;

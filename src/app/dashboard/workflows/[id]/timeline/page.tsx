@@ -133,6 +133,21 @@ export default async function AgentTimelinePage({
                         <div className="font-medium inline-block px-2 py-0.5 bg-amber-100 text-amber-800 text-xs rounded border border-amber-200">{event.taxonomy}</div>
                       </div>
                     )}
+                    {event.totalTokens != null && (
+                      <div>
+                        <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">Usage</span>
+                        <div className="font-medium text-zinc-800 text-xs">
+                          {event.totalTokens} tokens (P: {event.promptTokens ?? 0}, C: {event.completionTokens ?? 0})
+                          {event.promptVersion && <span className="ml-1 text-zinc-400">[{event.promptVersion}]</span>}
+                        </div>
+                      </div>
+                    )}
+                    {event.estimatedCost != null && (
+                      <div>
+                        <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">Est. Cost</span>
+                        <div className="font-medium text-emerald-700 text-xs">${event.estimatedCost.toFixed(5)}</div>
+                      </div>
+                    )}
                     {(event.stateBefore || event.stateAfter) && (
                       <div className="md:col-span-2">
                         <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">State Transition</span>
@@ -145,9 +160,13 @@ export default async function AgentTimelinePage({
                     )}
                   </div>
 
-                  {event.reasoningSummary && (
+                  {event.reasoningSummary ? (
                     <div className="mt-2 text-sm bg-zinc-50/50 border-l-2 border-indigo-300 pl-3 py-1.5 text-zinc-700 italic">
                       {event.reasoningSummary}
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-sm bg-zinc-50/50 border-l-2 border-zinc-200 pl-3 py-1.5 text-zinc-400 italic">
+                      No reasoning summary recorded
                     </div>
                   )}
 

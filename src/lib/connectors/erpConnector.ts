@@ -16,8 +16,19 @@ export class ErpConnector {
       if (hasIdempotencyKey(idempotencyKey)) {
         console.warn(`[erp_connector] Idempotent no-op: ERP write already completed for key ${idempotencyKey}`);
       }
+      
+      const startTime = Date.now();
 
       try {
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'CONNECTOR_CALL_STARTED',
+          status: 'pending',
+          agentName: 'erpConnector',
+          toolName: request.operation,
+          input: { operation: request.operation, connectorId: 'erp' },
+        }).catch(() => {});
+
         const result = await withIdempotency(idempotencyKey, () => 
           withRetry(async () => {
             // Simulated ERP API call with transient failure rate
@@ -48,9 +59,33 @@ export class ErpConnector {
             }
           })
         );
+        
+        const latencyMs = Date.now() - startTime;
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'CONNECTOR_CALL_COMPLETED',
+          status: 'success',
+          agentName: 'erpConnector',
+          toolName: request.operation,
+          latencyMs,
+        }).catch(() => {});
+
         return { success: true, data: { recordId: result } };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const latencyMs = Date.now() - startTime;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'CONNECTOR_CALL_FAILED',
+          status: 'failed',
+          agentName: 'erpConnector',
+          toolName: request.operation,
+          latencyMs,
+          error: errorMessage,
+        }).catch(() => {});
+        
+        return { success: false, error: errorMessage };
       }
     }
 
