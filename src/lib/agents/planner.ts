@@ -10,7 +10,16 @@ export interface Plan {
   reasoningSummary: string;
 }
 
+export interface FailureContext {
+  failedWorker: string;
+  failureClass: string;
+  errorSummary: string;
+  attemptNumber?: number;
+  previousPlanIntent?: string;
+}
+
 export interface PlanContext {
+  failureContext?: FailureContext;
   workflow: {
     id: string;
     state: string;

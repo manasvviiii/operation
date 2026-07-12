@@ -16,6 +16,7 @@ import { redactForObservability } from './observability/redaction';
 import { checkPrerequisites } from './validation/prerequisiteGuard';
 import { extractPan, getLatestUserMessage } from './agents/workers/pan_agent';
 import { appendAgentEvent } from './observability/agentTimeline';
+import { classifyFailure } from './observability/failureClass';
 
 function toJsonValue(
   value: unknown
@@ -272,13 +273,22 @@ export async function runAgentLoop(
       context.workflow.state
     );
 
+    let replanCount = 0;
+    const MAX_REPLANS = 1;
+
     let plan: any = null;
     let tokensUsed = 0;
+    let workerResult: any;
+    let workerException = false;
+
+    while (replanCount <= MAX_REPLANS) {
+      if (replanCount > 0) plan = null;
+      workerException = false;
 
     /*
      * TEXT ROUTING OVERRIDE (Executes BEFORE planner dispatch)
      */
-    if (workflow.state === 'AWAITING_PAN' && triggerSource === 'inbound_message') {
+    if (!context.failureContext && workflow.state === 'AWAITING_PAN' && triggerSource === 'inbound_message') {
       const latestUserMessageContent = getLatestUserMessage(context.messages);
 
       console.log('[PAN DEBUG] workflow state:', workflow.state);
@@ -311,7 +321,7 @@ export async function runAgentLoop(
           });
         }
       }
-    } else if (workflow.state === 'VALIDATING' && triggerSource === 'inbound_message') {
+    } else if (!context.failureContext && workflow.state === 'VALIDATING' && triggerSource === 'inbound_message') {
       const hasPendingDocument = documents.some(
         (document) =>
           !document.verified &&
@@ -335,7 +345,7 @@ export async function runAgentLoop(
           reasoningSummary: plan.reasoningSummary,
         });
       }
-    } else if (workflow.state === 'WRITING_ERP') {
+    } else if (!context.failureContext && workflow.state === 'WRITING_ERP') {
       plan = {
         nextWorker: 'erp_agent',
         targetState: 'COMPLETED',
@@ -403,7 +413,7 @@ export async function runAgentLoop(
         document.validationStatus === 'pending'
     );
 
-    if (pendingDocument) {
+    if (!context.failureContext && pendingDocument) {
       if (
         workflow.state === 'INITIATED' ||
         workflow.state === 'AWAITING_GST'
@@ -611,8 +621,7 @@ export async function runAgentLoop(
       reasoningSummary: `Dispatching ${plan.nextWorker}`,
     });
 
-    let workerResult: WorkerResult;
-    let workerException = false;
+    // workerResult and workerException declared outside loop
 
     if (plan.nextWorker === 'erp_agent') {
       const approved = await prisma.approval.findFirst({
@@ -698,6 +707,33 @@ export async function runAgentLoop(
           workerException,
         },
       });
+
+      if (replanCount < MAX_REPLANS) {
+        // Implement replanning!
+        const failureCategory = classifyFailure(workerResult.error);
+        const safeError = redactForObservability(workerResult.error ?? 'Unknown error') as string;
+        
+        context.failureContext = {
+          failedWorker: plan.nextWorker,
+          failureClass: failureCategory.taxonomy,
+          errorSummary: safeError,
+          attemptNumber: replanCount + 1,
+          previousPlanIntent: plan.reasoningSummary,
+        };
+
+        await appendAgentEvent({
+          workflowId,
+          eventType: 'REPLAN_REQUESTED',
+          status: 'failed',
+          agentName: 'planner',
+          workerName: plan.nextWorker,
+          input: context.failureContext,
+          reasoningSummary: `Worker ${plan.nextWorker} failed. Requesting replan. Reason: ${safeError}`,
+        });
+
+        replanCount++;
+        continue;
+      }
 
       if (
         workerResult.outboundMessage &&
@@ -792,6 +828,9 @@ export async function runAgentLoop(
 
       return;
     }
+    
+    break; // Break the replan loop on success
+  } // end of while loop
 
     /*
      * Only validated worker output reaches this point.
