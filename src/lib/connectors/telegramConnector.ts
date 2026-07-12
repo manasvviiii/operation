@@ -3,6 +3,7 @@ import { sendMessage, normalizeUpdate } from './telegram';
 import { downloadTelegramFile } from './telegramAttachment';
 import { withRetry, RetryEvent } from '../retry';
 import { appendAgentEvent } from '../observability/agentTimeline';
+import { prisma } from '../prisma';
 
 export class TelegramConnector implements Connector {
   id = 'telegram';
@@ -11,6 +12,38 @@ export class TelegramConnector implements Connector {
   async sendMessage(input: NormalizedOutboundMessage): Promise<ConnectorResponse> {
     const startTime = Date.now();
     const workflowId = input.workflowId ?? input.channelId;
+    const idempotencyKey = input.idempotencyKey;
+    
+    if (idempotencyKey && input.workflowId) {
+      try {
+        await prisma.message.create({
+          data: {
+            id: idempotencyKey,
+            workflowId: input.workflowId,
+            direction: 'OUTBOUND',
+            content: input.text,
+            channel: 'telegram',
+            connectorId: 'telegram',
+          }
+        });
+      } catch (e: any) {
+        if (e.code === 'P2002') {
+          await appendAgentEvent({
+            workflowId: input.workflowId,
+            eventType: 'DUPLICATE_OUTBOUND_SKIPPED',
+            status: 'duplicate_suppressed',
+            agentName: 'telegramConnector',
+            input: {
+              connectorId: 'telegram',
+              operation: 'sendMessage',
+              idempotencyKey,
+            }
+          }).catch(() => {});
+          return { success: true, duplicate_suppressed: true };
+        }
+        throw e;
+      }
+    }
     
     try {
       await appendAgentEvent({
@@ -22,9 +55,12 @@ export class TelegramConnector implements Connector {
         input: { operation: 'sendMessage', connectorId: 'telegram' },
       }).catch(() => {});
 
+      let tgMessageId: number | undefined;
+
       await withRetry(
         async () => {
-          await sendMessage(input.channelId, input.text);
+          const msg = await sendMessage(input.channelId, input.text);
+          tgMessageId = msg.message_id;
         },
         {
           maxAttempts: 3,
@@ -56,7 +92,6 @@ export class TelegramConnector implements Connector {
           }
         }
       );
-      
       const latencyMs = Date.now() - startTime;
       await appendAgentEvent({
         workflowId,
@@ -66,6 +101,13 @@ export class TelegramConnector implements Connector {
         toolName: 'sendMessage',
         latencyMs,
       }).catch(() => {});
+
+      if (idempotencyKey && tgMessageId) {
+        await prisma.message.update({
+          where: { id: idempotencyKey },
+          data: { externalMessageId: String(tgMessageId) }
+        }).catch(() => {});
+      }
 
       return { success: true };
     } catch (error) {

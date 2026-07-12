@@ -55,7 +55,7 @@ describe('handleInboundUpdate', () => {
   it('returns early and does nothing when normalizeUpdate returns null', async () => {
     mockHandleInbound.mockResolvedValue(null);
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       some: 'raw update',
     });
 

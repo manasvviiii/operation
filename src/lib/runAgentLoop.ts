@@ -78,8 +78,8 @@ export async function runAgentLoop(
       if (workflow.chatId) {
         await connector.sendMessage({
           channelId: workflow.chatId,
-          text:
-            '✅ Your onboarding is already complete. No further action is required.',
+          text: '✅ Your onboarding is already complete. No further action is required.',
+          idempotencyKey: `outbound:${workflowId}:completed_notification:${triggerSource}`,
         });
       }
 
@@ -129,8 +129,8 @@ export async function runAgentLoop(
       if (workflow.chatId) {
         await connector.sendMessage({
           channelId: workflow.chatId,
-          text:
-            "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
+          text: "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
+          idempotencyKey: `outbound:${workflowId}:pending_approval_notification:${triggerSource}`,
         });
       }
 
@@ -706,6 +706,7 @@ export async function runAgentLoop(
         await connector.sendMessage({
           channelId: workflow.chatId,
           text: workerResult.outboundMessage,
+          idempotencyKey: `outbound:${workflowId}:${execution.id}:worker_error`,
         });
       }
 
@@ -770,6 +771,7 @@ export async function runAgentLoop(
         await connector.sendMessage({
           channelId: workflow.chatId,
           text: workerResult.outboundMessage,
+          idempotencyKey: `outbound:${workflowId}:${execution.id}:validation_failed`,
         });
       }
 
@@ -972,6 +974,7 @@ export async function runAgentLoop(
       await connector.sendMessage({
         channelId: workflow.chatId,
         text: workerResult.outboundMessage,
+        idempotencyKey: `outbound:${workflowId}:${workflow.state}_to_${plan.targetState}:${plan.nextWorker}`,
       });
     }
 

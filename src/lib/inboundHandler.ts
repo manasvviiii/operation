@@ -11,6 +11,7 @@ import {
   type DocumentMetadata,
 } from './document/ingestion';
 import { extractPan } from './agents/workers/pan_agent';
+import { appendAgentEvent } from './observability/agentTimeline';
 
 
 
@@ -150,6 +151,39 @@ export async function handleInboundUpdate(
     }
   }
 
+  let messageRecord;
+  try {
+    messageRecord = await prisma.message.create({
+      data: {
+        workflowId: workflow.id,
+        connectorId: connectorId,
+        direction: 'INBOUND',
+        role: 'user',
+        channel: connectorId,
+        senderId,
+        content: body,
+        externalMessageId,
+        createdAt: ts,
+      },
+    });
+  } catch (error: any) {
+    if (error.code === 'P2002' && externalMessageId) {
+      console.warn(`[inbound] Duplicate message skipped: ${externalMessageId}`);
+      
+      await appendAgentEvent({
+        workflowId: workflow.id,
+        eventType: 'DUPLICATE_INBOUND_SKIPPED',
+        status: 'success',
+        agentName: 'inboundHandler',
+        input: { externalMessageId }
+      }).catch(() => {});
+      return;
+    } else {
+      console.error('[inbound] Failed to insert message record:', error);
+      return;
+    }
+  }
+
   const message = rawUpdate.message;
 
   let attachmentMetadata: NormalizedAttachment | null =
@@ -274,53 +308,25 @@ export async function handleInboundUpdate(
   }
 
   try {
-    await prisma.message.create({
-      data: {
-        workflowId: workflow.id,
-
-        connectorId: connectorId,
-
-        direction: 'INBOUND',
-
-        role: 'user',
-
-        channel: connectorId,
-
-        senderId,
-
-        content: body,
-
-        attachments: attachmentMetadata
-          ? {
-              kind: attachmentMetadata.kind,
-
-              fileId: attachmentMetadata.fileId,
-
-              fileUniqueId:
-                attachmentMetadata.fileUniqueId,
-
-              originalFilename:
-                attachmentMetadata.originalFilename,
-
-              mime: attachmentMetadata.mime,
-
-              fileSize: attachmentMetadata.fileSize,
-
-              caption: attachmentMetadata.caption,
-
-              width: attachmentMetadata.width,
-
-              height: attachmentMetadata.height,
-
-              documentId,
-            }
-          : undefined,
-
-        externalMessageId,
-
-        createdAt: ts,
-      },
-    });
+    if (attachmentMetadata && messageRecord) {
+      await prisma.message.update({
+        where: { id: messageRecord.id },
+        data: {
+          attachments: {
+            kind: attachmentMetadata.kind,
+            fileId: attachmentMetadata.fileId,
+            fileUniqueId: attachmentMetadata.fileUniqueId,
+            originalFilename: attachmentMetadata.originalFilename,
+            mime: attachmentMetadata.mime,
+            fileSize: attachmentMetadata.fileSize,
+            caption: attachmentMetadata.caption,
+            width: attachmentMetadata.width,
+            height: attachmentMetadata.height,
+            documentId,
+          },
+        },
+      });
+    }
 
     const outOfOrderInputHandled =
       await handleOutOfOrderInput(

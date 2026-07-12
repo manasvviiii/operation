@@ -124,7 +124,7 @@ describe('Timeline Gaps Implementation', () => {
       
       expect(startEvent).toBeDefined();
       expect(completeEvent).toBeDefined();
-      expect(completeEvent[0].latencyMs).toBeTypeOf('number');
+      expect(completeEvent![0].latencyMs).toBeTypeOf('number');
       
       const allArgs = JSON.stringify(calls);
       expect(allArgs).not.toContain('BOT_TOKEN');
@@ -140,7 +140,7 @@ describe('Timeline Gaps Implementation', () => {
       const calls = appendAgentEventSpy.mock.calls;
       const failedEvent = calls.find((c: any) => c[0].eventType === 'CONNECTOR_CALL_FAILED');
       expect(failedEvent).toBeDefined();
-      expect(failedEvent[0].error).toBe('ERP_TIMEOUT');
+      expect(failedEvent![0].error).toBe('ERP_TIMEOUT');
     });
   });
 
@@ -163,7 +163,7 @@ describe('Timeline Gaps Implementation', () => {
       await runAgentLoop('w1', 'trigger');
 
       const calls = appendAgentEventSpy.mock.calls;
-      const planEvent = calls.find((c: any) => c[0].eventType === 'PLAN_CREATED')[0];
+      const planEvent = calls.find((c: any) => c[0].eventType === 'PLAN_CREATED')![0];
       
       expect(planEvent.promptTokens).toBe(1000);
       expect(planEvent.estimatedCost).toBeNull();
@@ -187,7 +187,7 @@ describe('Timeline Gaps Implementation', () => {
       await runAgentLoop('w1', 'trigger');
 
       const calls = appendAgentEventSpy.mock.calls;
-      const planEvent = calls.find((c: any) => c[0].eventType === 'PLAN_CREATED')[0];
+      const planEvent = calls.find((c: any) => c[0].eventType === 'PLAN_CREATED')![0];
       
       expect(planEvent.promptTokens).toBeNull();
       expect(planEvent.estimatedCost).toBeNull();

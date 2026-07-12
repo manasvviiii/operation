@@ -154,6 +154,7 @@ export async function POST(
         await connector.sendMessage({
           channelId: approval.workflow.chatId,
           text,
+          idempotencyKey: `outbound:${approval.workflowId}:approval_rejected:${approvalId}`,
         }).catch((err) => {
           console.error('Failed to send rejection message via connector:', err);
         });

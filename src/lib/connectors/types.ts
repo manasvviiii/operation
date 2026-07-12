@@ -2,6 +2,7 @@ export interface NormalizedOutboundMessage {
   channelId: string;
   text: string;
   workflowId?: string;
+  idempotencyKey?: string;
 }
 
 export interface NormalizedInboundEvent {
@@ -18,6 +19,7 @@ export interface ConnectorResponse {
   success: boolean;
   data?: Record<string, unknown>;
   error?: string;
+  duplicate_suppressed?: boolean;
 }
 
 export interface Connector {

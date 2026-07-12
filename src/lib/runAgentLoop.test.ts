@@ -453,6 +453,7 @@ describe('runAgentLoop', () => {
       channelId: 'test-chat-id',
       text:
         'Please upload a valid GST certificate.',
+      idempotencyKey: expect.any(String),
     });
 
     expect(
@@ -513,6 +514,7 @@ describe('runAgentLoop', () => {
       channelId: 'test-chat-id',
       text:
         "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
+      idempotencyKey: expect.any(String),
     });
   });
 
@@ -635,6 +637,7 @@ describe('runAgentLoop', () => {
       channelId: 'test-chat-id',
       text:
         "Thanks — we're finishing up validation on your details. You'll hear from us shortly.",
+      idempotencyKey: expect.any(String),
     });
   });
 
@@ -650,10 +653,10 @@ describe('runAgentLoop', () => {
 
     expect(mockPlanNext).not.toHaveBeenCalled();
     expect(mockDispatchWorker).not.toHaveBeenCalled();
-    expect(mockSendMessage).toHaveBeenCalledWith({
+    expect(mockSendMessage).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'chat-999',
       text: expect.stringContaining('already complete'),
-    });
+    }));
   });
 
   it('ERP worker rejects execution without APPROVED approval (hard guard)', async () => {

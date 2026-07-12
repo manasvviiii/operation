@@ -5,9 +5,22 @@ import { InMemoryConnector } from './inMemoryConnector';
 import { sendMessage } from './telegram';
 import { Connector } from './types';
 
-// Mock telegram module
 vi.mock('./telegram', () => ({
-  sendMessage: vi.fn(),
+  sendMessage: vi.fn().mockResolvedValue({ message_id: 123 }),
+}));
+
+vi.mock('../prisma', () => ({
+  prisma: {
+    message: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'mock-id' }),
+      update: vi.fn().mockResolvedValue({ id: 'mock-id' }),
+    }
+  }
+}));
+
+vi.mock('../observability/agentTimeline', () => ({
+  appendAgentEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe('Connectors', () => {

@@ -1,4 +1,4 @@
-import TelegramBot from 'node-telegram-bot-api';
+import TelegramBot, { Message as TelegramMessage } from 'node-telegram-bot-api';
 
 export type InboundMessage = {
   workflowId?: string;
@@ -44,11 +44,11 @@ export function normalizeUpdate(update: any): InboundMessage | null {
     senderId: String(message.from.id),
     body,
     attachments: message.document ?? message.photo ?? message.video ?? undefined,
-    externalMessageId: message.message_id != null ? String(message.message_id) : undefined,
+    externalMessageId: update.update_id ? `inbound:telegram:${update.update_id}` : (message.message_id != null ? String(message.message_id) : undefined),
     ts: new Date(message.date * 1000),
   };
 }
 
-export async function sendMessage(chatId: string, text: string): Promise<void> {
-  await getBot().sendMessage(chatId, text);
+export async function sendMessage(chatId: string, text: string): Promise<TelegramMessage> {
+  return await getBot().sendMessage(chatId, text);
 }

@@ -231,9 +231,9 @@ describe('POST /api/approvals/[id]/decide', () => {
     const res = await POST(req, makeParams('appr-5'));
 
     expect(res.status).toBe(200);
-    expect(mockSendMessage).toHaveBeenCalledWith({
+    expect(mockSendMessage).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'chat-999',
       text: expect.stringContaining('Your onboarding was not approved'),
-    });
+    }));
   });
 });
