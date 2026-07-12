@@ -40,6 +40,69 @@ describe('retry and idempotency logic', () => {
       expect(fn).toHaveBeenCalledTimes(3);
       expect(onRetry).toHaveBeenCalledTimes(2); // Called on attempts 1 and 2
     });
+
+    it('emits observability events on retry success', async () => {
+      const fn = vi.fn()
+        .mockRejectedValueOnce(new Error('HTTP Error 429: Too Many Requests'))
+        .mockResolvedValueOnce('success');
+      const onRetryEvent = vi.fn();
+      
+      const result = await withRetry(fn, { maxAttempts: 3, baseDelayMs: 10, onRetryEvent });
+      
+      expect(result).toBe('success');
+      expect(onRetryEvent).toHaveBeenCalledTimes(3);
+      
+      // Attempt 1 fails, schedules retry
+      expect(onRetryEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        eventType: 'retry_scheduled',
+        attemptNumber: 1,
+        taxonomy: 'transient',
+        backoffMs: expect.any(Number),
+        error: 'HTTP Error 429: Too Many Requests'
+      }));
+      
+      // Attempt 2 starts
+      expect(onRetryEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        eventType: 'retry_attempt',
+        attemptNumber: 2
+      }));
+      
+      // Attempt 2 succeeds
+      expect(onRetryEvent).toHaveBeenNthCalledWith(3, expect.objectContaining({
+        eventType: 'retry_succeeded',
+        attemptNumber: 2
+      }));
+    });
+
+    it('emits observability events on retry exhaustion', async () => {
+      const fn = vi.fn().mockRejectedValue(new Error('HTTP Error 500'));
+      const onRetryEvent = vi.fn();
+      
+      await expect(withRetry(fn, { maxAttempts: 2, baseDelayMs: 10, onRetryEvent }))
+        .rejects.toThrow('HTTP Error 500');
+        
+      expect(onRetryEvent).toHaveBeenCalledTimes(3);
+      
+      // Attempt 1 fails, schedules retry
+      expect(onRetryEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        eventType: 'retry_scheduled',
+        attemptNumber: 1,
+        taxonomy: 'connector_down'
+      }));
+      
+      // Attempt 2 starts
+      expect(onRetryEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        eventType: 'retry_attempt',
+        attemptNumber: 2
+      }));
+      
+      // Attempt 2 exhausts retries
+      expect(onRetryEvent).toHaveBeenNthCalledWith(3, expect.objectContaining({
+        eventType: 'retry_exhausted',
+        attemptNumber: 2,
+        taxonomy: 'connector_down'
+      }));
+    });
   });
 
   describe('withIdempotency', () => {

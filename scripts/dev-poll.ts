@@ -11,7 +11,7 @@ const bot = new TelegramBot(token, { polling: true });
 
 bot.on('message', (message) => {
   console.log('[dev-poll] Received message:', message.chat.id, message.text ?? '(non-text)');
-  handleInboundUpdate({ message }).catch((error) => {
+  handleInboundUpdate('telegram', { message }).catch((error) => {
     console.error('[dev-poll] Error handling message:', error);
   });
 });

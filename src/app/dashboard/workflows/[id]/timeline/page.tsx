@@ -115,6 +115,24 @@ export default async function AgentTimelinePage({
                         <div className="font-medium text-zinc-800">{event.latencyMs}ms</div>
                       </div>
                     )}
+                    {event.attemptNumber != null && (
+                      <div>
+                        <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">Attempt</span>
+                        <div className="font-medium text-zinc-800">{event.attemptNumber} {event.maxAttempts ? `of ${event.maxAttempts}` : ''}</div>
+                      </div>
+                    )}
+                    {event.backoffMs != null && event.backoffMs > 0 && (
+                      <div>
+                        <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">Backoff</span>
+                        <div className="font-medium text-zinc-800">{event.backoffMs}ms</div>
+                      </div>
+                    )}
+                    {event.taxonomy && (
+                      <div>
+                        <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">Taxonomy</span>
+                        <div className="font-medium inline-block px-2 py-0.5 bg-amber-100 text-amber-800 text-xs rounded border border-amber-200">{event.taxonomy}</div>
+                      </div>
+                    )}
                     {(event.stateBefore || event.stateAfter) && (
                       <div className="md:col-span-2">
                         <span className="text-zinc-500 text-xs uppercase tracking-wider font-semibold block mb-1">State Transition</span>

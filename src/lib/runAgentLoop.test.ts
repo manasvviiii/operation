@@ -46,15 +46,17 @@ vi.mock('./observability/agentTimeline', () => ({
   appendAgentEvent: vi.fn(),
 }));
 
-const mockTelegramExecute = vi
+const mockSendMessage = vi
   .fn()
   .mockResolvedValue({ success: true });
 
-vi.mock('./connectors/telegramConnector', () => {
+vi.mock('./connectors/registry', () => {
   return {
-    TelegramConnector: class MockTelegramConnector {
-      execute = mockTelegramExecute;
-    },
+    getConnector: vi.fn(() => ({
+      sendMessage: mockSendMessage,
+      handleInbound: vi.fn(),
+      downloadAttachment: vi.fn(),
+    })),
   };
 });
 
@@ -73,6 +75,7 @@ function createWorkflow(
     currentStep: 'test-step',
     vendorId: 'vendor-id',
     chatId: null,
+    primaryChannel: 'telegram',
     extractedFields: {},
     vendor: {
       id: 'vendor-id',
@@ -444,14 +447,11 @@ describe('runAgentLoop', () => {
     );
 
     expect(
-      mockTelegramExecute
+      mockSendMessage
     ).toHaveBeenCalledWith({
-      operation: 'sendMessage',
-      payload: {
-        chatId: 'test-chat-id',
-        text:
-          'Please upload a valid GST certificate.',
-      },
+      channelId: 'test-chat-id',
+      text:
+        'Please upload a valid GST certificate.',
     });
 
     expect(
@@ -507,14 +507,11 @@ describe('runAgentLoop', () => {
     );
 
     expect(
-      mockTelegramExecute
+      mockSendMessage
     ).toHaveBeenCalledWith({
-      operation: 'sendMessage',
-      payload: {
-        chatId: 'test-chat-id',
-        text:
-          "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
-      },
+      channelId: 'test-chat-id',
+      text:
+        "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
     });
   });
 
@@ -632,14 +629,11 @@ describe('runAgentLoop', () => {
     );
 
     expect(
-      mockTelegramExecute
+      mockSendMessage
     ).toHaveBeenCalledWith({
-      operation: 'sendMessage',
-      payload: {
-        chatId: 'test-chat-id',
-        text:
-          "Thanks — we're finishing up validation on your details. You'll hear from us shortly.",
-      },
+      channelId: 'test-chat-id',
+      text:
+        "Thanks — we're finishing up validation on your details. You'll hear from us shortly.",
     });
   });
 
@@ -655,12 +649,9 @@ describe('runAgentLoop', () => {
 
     expect(mockPlanNext).not.toHaveBeenCalled();
     expect(mockDispatchWorker).not.toHaveBeenCalled();
-    expect(mockTelegramExecute).toHaveBeenCalledWith({
-      operation: 'sendMessage',
-      payload: {
-        chatId: 'chat-999',
-        text: expect.stringContaining('already complete'),
-      },
+    expect(mockSendMessage).toHaveBeenCalledWith({
+      channelId: 'chat-999',
+      text: expect.stringContaining('already complete'),
     });
   });
 

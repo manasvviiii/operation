@@ -11,7 +11,8 @@ import type {
   WorkerContext,
   WorkerResult,
 } from './agents/workers/types';
-import { TelegramConnector } from './connectors/telegramConnector';
+import { getConnector } from './connectors/registry';
+import { redactForObservability } from './observability/redaction';
 import { checkPrerequisites } from './validation/prerequisiteGuard';
 import { extractPan, getLatestUserMessage } from './agents/workers/pan_agent';
 import { appendAgentEvent } from './observability/agentTimeline';
@@ -42,7 +43,7 @@ export async function runAgentLoop(
   workflowId: string,
   triggerSource: string
 ): Promise<void> {
-  const telegramConnector = new TelegramConnector();
+
 
   let executionId: string | null = null;
 
@@ -62,6 +63,8 @@ export async function runAgentLoop(
       );
     }
 
+    const connector = getConnector(workflow.primaryChannel);
+
     /*
      * COMPLETED is a terminal state.
      *
@@ -73,13 +76,10 @@ export async function runAgentLoop(
       );
 
       if (workflow.chatId) {
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId: workflow.chatId,
-            text:
-              '✅ Your onboarding is already complete. No further action is required.',
-          },
+        await connector.sendMessage({
+          channelId: workflow.chatId,
+          text:
+            '✅ Your onboarding is already complete. No further action is required.',
         });
       }
 
@@ -127,13 +127,10 @@ export async function runAgentLoop(
       });
 
       if (workflow.chatId) {
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId: workflow.chatId,
-            text:
-              "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
-          },
+        await connector.sendMessage({
+          channelId: workflow.chatId,
+          text:
+            "Your onboarding packet is under review. You don't need to do anything — I'll message you here when there's an update.",
         });
       }
 
@@ -287,11 +284,11 @@ export async function runAgentLoop(
       console.log('[PAN DEBUG] workflow state:', workflow.state);
       console.log('[PAN DEBUG] trigger:', triggerSource);
       console.log('[PAN DEBUG] messages count:', context.messages.length);
-      console.log('[PAN DEBUG] latest user message:', latestUserMessageContent);
+      console.log('[PAN DEBUG] latest user message:', redactForObservability(latestUserMessageContent));
 
       if (latestUserMessageContent) {
         const pan = extractPan(latestUserMessageContent);
-        console.log('[PAN DEBUG] extracted PAN:', pan);
+        console.log('[PAN DEBUG] extracted PAN:', redactForObservability(pan));
 
         if (pan) {
           plan = {
@@ -691,12 +688,9 @@ export async function runAgentLoop(
         workerResult.outboundMessage &&
         workflow.chatId
       ) {
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId: workflow.chatId,
-            text: workerResult.outboundMessage,
-          },
+        await connector.sendMessage({
+          channelId: workflow.chatId,
+          text: workerResult.outboundMessage,
         });
       }
 
@@ -758,12 +752,9 @@ export async function runAgentLoop(
           '[runAgentLoop] sending validation correction'
         );
 
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId: workflow.chatId,
-            text: workerResult.outboundMessage,
-          },
+        await connector.sendMessage({
+          channelId: workflow.chatId,
+          text: workerResult.outboundMessage,
         });
       }
 
@@ -963,12 +954,9 @@ export async function runAgentLoop(
       workerResult.outboundMessage &&
       workflow.chatId
     ) {
-      await telegramConnector.execute({
-        operation: 'sendMessage',
-        payload: {
-          chatId: workflow.chatId,
-          text: workerResult.outboundMessage,
-        },
+      await connector.sendMessage({
+        channelId: workflow.chatId,
+        text: workerResult.outboundMessage,
       });
     }
 

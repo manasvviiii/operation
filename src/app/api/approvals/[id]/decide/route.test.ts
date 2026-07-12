@@ -29,11 +29,11 @@ vi.mock('@/lib/runAgentLoop', () => ({
   runAgentLoop: (...args: any[]) => mockRunAgentLoop(...args),
 }));
 
-const mockTelegramExecute = vi.fn().mockResolvedValue({ success: true });
-vi.mock('@/lib/connectors/telegramConnector', () => ({
-  TelegramConnector: class MockTelegramConnector {
-    execute = mockTelegramExecute;
-  },
+const mockSendMessage = vi.fn().mockResolvedValue({ success: true });
+vi.mock('@/lib/connectors/registry', () => ({
+  getConnector: vi.fn(() => ({
+    sendMessage: mockSendMessage,
+  })),
 }));
 
 import { prisma } from '@/lib/prisma';
@@ -231,14 +231,9 @@ describe('POST /api/approvals/[id]/decide', () => {
     const res = await POST(req, makeParams('appr-5'));
 
     expect(res.status).toBe(200);
-    expect(mockTelegramExecute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        operation: 'sendMessage',
-        payload: expect.objectContaining({
-          chatId: 'chat-999',
-          text: expect.stringContaining('Your onboarding was not approved'),
-        }),
-      })
-    );
+    expect(mockSendMessage).toHaveBeenCalledWith({
+      channelId: 'chat-999',
+      text: expect.stringContaining('Your onboarding was not approved'),
+    });
   });
 });

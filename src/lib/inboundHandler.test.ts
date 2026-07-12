@@ -2,16 +2,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock TelegramConnector (must be before imports that use it)
-const { mockTelegramExecute } = vi.hoisted(() => ({
-  mockTelegramExecute: vi
-    .fn()
-    .mockResolvedValue({ success: true }),
-}));
-
-vi.mock('./connectors/telegramConnector', () => ({
-  TelegramConnector: class MockTelegramConnector {
-    execute = mockTelegramExecute;
-  },
+const mockSendMessage = vi.fn().mockResolvedValue({ success: true });
+const mockHandleInbound = vi.fn();
+const mockDownloadAttachment = vi.fn();
+vi.mock('./connectors/registry', () => ({
+  getConnector: vi.fn(() => ({
+    sendMessage: mockSendMessage,
+    handleInbound: mockHandleInbound,
+    downloadAttachment: mockDownloadAttachment
+  }))
 }));
 
 import { handleInboundUpdate } from './inboundHandler';
@@ -54,7 +53,7 @@ describe('handleInboundUpdate', () => {
   });
 
   it('returns early and does nothing when normalizeUpdate returns null', async () => {
-    mockNormalizeUpdate.mockReturnValue(null);
+    mockHandleInbound.mockResolvedValue(null);
 
     await handleInboundUpdate({
       some: 'raw update',
@@ -74,8 +73,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('resolves workflow via /start deep link, binds chatId when not already set, and calls runAgentLoop', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-1',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-1',
       senderId: 'sender-1',
       body: '/start wf-1',
       externalMessageId: 'ext-1',
@@ -99,7 +98,7 @@ describe('handleInboundUpdate', () => {
 
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       message: {},
     });
 
@@ -109,8 +108,7 @@ describe('handleInboundUpdate', () => {
       where: {
         id: 'wf-1',
       },
-      data: {
-        chatId: 'chat-1',
+      data: { chatId: 'chat-1',
       },
     });
 
@@ -141,8 +139,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('does not re-bind chatId when the workflow already has one set', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-1',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-1',
       senderId: 'sender-1',
       body: '/start wf-1',
       externalMessageId: 'ext-2',
@@ -160,7 +158,7 @@ describe('handleInboundUpdate', () => {
 
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       message: {},
     });
 
@@ -177,8 +175,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('logs a warning and returns early for an unknown workflowId from a /start link', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-1',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-1',
       senderId: 'sender-1',
       body: '/start wf-does-not-exist',
       externalMessageId: 'ext-3',
@@ -190,7 +188,7 @@ describe('handleInboundUpdate', () => {
       null
     );
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       message: {},
     });
 
@@ -204,8 +202,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('resolves an already-bound chatId with no workflowId and calls runAgentLoop', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-2',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-2',
       senderId: 'sender-2',
       body: 'ABCDE1234F',
       externalMessageId: 'ext-4',
@@ -223,15 +221,14 @@ describe('handleInboundUpdate', () => {
 
     mockRunAgentLoop.mockResolvedValue(undefined);
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       message: {},
     });
 
     expect(
       mockPrisma.workflow.findFirst
     ).toHaveBeenCalledWith({
-      where: {
-        chatId: 'chat-2',
+      where: { chatId: 'chat-2',
       },
       orderBy: {
         updatedAt: 'desc',
@@ -247,8 +244,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('sends a fallback message and does not call runAgentLoop for an unrecognized chatId with no workflowId', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-unknown',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-unknown',
       senderId: 'sender-3',
       body: 'hello',
       externalMessageId: 'ext-5',
@@ -260,19 +257,13 @@ describe('handleInboundUpdate', () => {
       null
     );
 
-    await handleInboundUpdate({
+    await handleInboundUpdate('telegram', {
       message: {},
     });
 
-    expect(
-      mockTelegramExecute
-    ).toHaveBeenCalledWith({
-      operation: 'sendMessage',
-      payload: {
-        chatId: 'chat-unknown',
-        text:
-          "I don't recognize this chat — please use your onboarding link to start.",
-      },
+    expect(mockSendMessage).toHaveBeenCalledWith({
+      channelId: 'chat-unknown',
+      text: "I don't recognize this chat — please use your onboarding link to start.",
     });
 
     expect(
@@ -285,8 +276,8 @@ describe('handleInboundUpdate', () => {
   });
 
   it('does not rethrow when runAgentLoop throws — catches and logs instead', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-3',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-3',
       senderId: 'sender-4',
       body: 'some message',
       externalMessageId: 'ext-6',
@@ -307,15 +298,15 @@ describe('handleInboundUpdate', () => {
     );
 
     await expect(
-      handleInboundUpdate({
-        message: {},
+      handleInboundUpdate('telegram', {
+      message: {},
       })
     ).resolves.not.toThrow();
   });
 
   it('does not rethrow when message.create itself throws', async () => {
-    mockNormalizeUpdate.mockReturnValue({
-      chatId: 'chat-4',
+    mockHandleInbound.mockResolvedValue({
+      channelId: 'chat-4',
       senderId: 'sender-5',
       body: 'some message',
       externalMessageId: 'ext-7',
@@ -334,8 +325,8 @@ describe('handleInboundUpdate', () => {
     );
 
     await expect(
-      handleInboundUpdate({
-        message: {},
+      handleInboundUpdate('telegram', {
+      message: {},
       })
     ).resolves.not.toThrow();
 

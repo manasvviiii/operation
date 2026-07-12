@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { validateTransition } from '@/lib/stateMachine';
 import { writeAuditLog } from '@/lib/auditLog';
 import { runAgentLoop } from '@/lib/runAgentLoop';
-import { TelegramConnector } from '@/lib/connectors/telegramConnector';
+import { getConnector } from '@/lib/connectors/registry';
 
 export async function POST(
   request: NextRequest,
@@ -129,15 +129,12 @@ export async function POST(
 
       if (approval.workflow.chatId) {
         const text = `Your onboarding was not approved. Please contact the procurement team for further information.`;
-        const telegramConnector = new TelegramConnector();
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId: approval.workflow.chatId,
-            text,
-          },
+        const connector = getConnector(approval.workflow.primaryChannel || 'telegram');
+        await connector.sendMessage({
+          channelId: approval.workflow.chatId,
+          text,
         }).catch((err) => {
-          console.error('Failed to send rejection message to vendor via telegram:', err);
+          console.error('Failed to send rejection message via connector:', err);
         });
       }
     }

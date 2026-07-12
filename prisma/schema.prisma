@@ -178,6 +178,10 @@ model AgentEvent {
   status           String
   latencyMs        Int?
   error            String?
+  attemptNumber    Int?
+  maxAttempts      Int?
+  backoffMs        Int?
+  taxonomy         String?
   createdAt        DateTime @default(now())
 
   @@unique([workflowId, sequenceNumber])

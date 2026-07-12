@@ -1,11 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
-import { normalizeUpdate } from './connectors/telegram';
-import { TelegramConnector } from './connectors/telegramConnector';
+import { getConnector } from './connectors/registry';
 import { runAgentLoop } from './runAgentLoop';
 import {
   extractAttachment,
-  downloadTelegramFile,
   type NormalizedAttachment,
 } from './connectors/telegramAttachment';
 import {
@@ -14,7 +12,7 @@ import {
 } from './document/ingestion';
 import { extractPan } from './agents/workers/pan_agent';
 
-const telegramConnector = new TelegramConnector();
+
 
 function getExtractedFields(
   value: unknown
@@ -40,7 +38,8 @@ async function handleOutOfOrderInput(
     extractedFields?: unknown;
   },
   body: string,
-  hasAttachment: boolean
+  hasAttachment: boolean,
+  connectorId: string
 ): Promise<boolean> {
   if (
     workflow.state !== 'AWAITING_GST' ||
@@ -72,13 +71,11 @@ async function handleOutOfOrderInput(
   });
 
   if (workflow.chatId) {
-    await telegramConnector.execute({
-      operation: 'sendMessage',
-      payload: {
-        chatId: workflow.chatId,
-        text:
-          'That looks like a valid PAN — noted and saved for later. I still need your GST registration certificate first. Please upload the GST certificate as a PDF or clear image.',
-      },
+    const connector = getConnector(connectorId);
+    await connector.sendMessage({
+      channelId: workflow.chatId,
+      text:
+        'That looks like a valid PAN — noted and saved for later. I still need your GST registration certificate first. Please upload the GST certificate as a PDF or clear image.',
     });
   }
 
@@ -86,16 +83,18 @@ async function handleOutOfOrderInput(
 }
 
 export async function handleInboundUpdate(
+  connectorId: string,
   rawUpdate: any
 ): Promise<void> {
-  const inbound = normalizeUpdate(rawUpdate);
+  const connector = getConnector(connectorId);
+  const inbound = await connector.handleInbound?.(rawUpdate);
 
   if (!inbound) {
     return;
   }
 
   const {
-    chatId,
+    channelId: chatId,
     senderId,
     body,
     externalMessageId,
@@ -141,13 +140,10 @@ export async function handleInboundUpdate(
     });
 
     if (!workflow) {
-      await telegramConnector.execute({
-        operation: 'sendMessage',
-        payload: {
-          chatId,
-          text:
-            "I don't recognize this chat — please use your onboarding link to start.",
-        },
+      await connector.sendMessage({
+        channelId: chatId,
+        text:
+          "I don't recognize this chat — please use your onboarding link to start.",
       });
 
       return;
@@ -174,7 +170,7 @@ export async function handleInboundUpdate(
         const {
           data: fileData,
           mime,
-        } = await downloadTelegramFile(
+        } = await connector.downloadAttachment!(
           attachmentMetadata.fileId
         );
 
@@ -266,13 +262,10 @@ export async function handleInboundUpdate(
          * record and incorrectly ask for the same document
          * again.
          */
-        await telegramConnector.execute({
-          operation: 'sendMessage',
-          payload: {
-            chatId,
-            text:
-              'I received your file, but I could not store or process it. Please upload the document again.',
-          },
+        await connector.sendMessage({
+          channelId: chatId,
+          text:
+            'I received your file, but I could not store or process it. Please upload the document again.',
         });
 
         return;
@@ -285,13 +278,13 @@ export async function handleInboundUpdate(
       data: {
         workflowId: workflow.id,
 
-        connectorId: 'telegram',
+        connectorId: connectorId,
 
         direction: 'INBOUND',
 
         role: 'user',
 
-        channel: 'telegram',
+        channel: connectorId,
 
         senderId,
 
@@ -333,7 +326,8 @@ export async function handleInboundUpdate(
       await handleOutOfOrderInput(
         workflow,
         body,
-        attachmentMetadata !== null
+        attachmentMetadata !== null,
+        connectorId
       );
 
     if (outOfOrderInputHandled) {

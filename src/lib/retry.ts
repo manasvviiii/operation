@@ -1,23 +1,91 @@
+import { classifyFailure, FailureTaxonomy } from './observability/failureClass';
+
+export type RetryContext = {
+  workflowId: string;
+  executionId?: string;
+  agentRunId?: string;
+  connectorId?: string;
+};
+
+export type RetryEvent = {
+  eventType: 'retry_scheduled' | 'retry_attempt' | 'retry_succeeded' | 'retry_exhausted';
+  attemptNumber: number;
+  maxAttempts: number;
+  backoffMs: number;
+  taxonomy?: FailureTaxonomy;
+  error?: string;
+  context?: RetryContext;
+};
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   options?: {
     maxAttempts?: number;
     baseDelayMs?: number;
     onRetry?: (attempt: number, error: unknown) => void;
+    context?: RetryContext;
+    onRetryEvent?: (event: RetryEvent) => void;
   }
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? 4;
   const baseDelayMs = options?.baseDelayMs ?? 300;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1 && options?.onRetryEvent) {
+      options.onRetryEvent({
+        eventType: 'retry_attempt',
+        attemptNumber: attempt,
+        maxAttempts,
+        backoffMs: 0,
+        context: options.context,
+      });
+    }
+
     try {
-      return await fn();
+      const result = await fn();
+      
+      if (attempt > 1 && options?.onRetryEvent) {
+        options.onRetryEvent({
+          eventType: 'retry_succeeded',
+          attemptNumber: attempt,
+          maxAttempts,
+          backoffMs: 0,
+          context: options.context,
+        });
+      }
+      
+      return result;
     } catch (error) {
+      const { taxonomy, safeMessage } = classifyFailure(error);
+      
       if (attempt === maxAttempts) {
+        if (options?.onRetryEvent) {
+          options.onRetryEvent({
+            eventType: 'retry_exhausted',
+            attemptNumber: attempt,
+            maxAttempts,
+            backoffMs: 0,
+            taxonomy,
+            error: safeMessage,
+            context: options.context,
+          });
+        }
         throw error;
       }
       
       const delay = Math.min(baseDelayMs * (2 ** (attempt - 1)) + Math.random() * 100, 5000);
+      
+      if (options?.onRetryEvent) {
+        options.onRetryEvent({
+          eventType: 'retry_scheduled',
+          attemptNumber: attempt,
+          maxAttempts,
+          backoffMs: Math.round(delay),
+          taxonomy,
+          error: safeMessage,
+          context: options.context,
+        });
+      }
       
       if (options?.onRetry) {
         options.onRetry(attempt, error);

@@ -8,6 +8,7 @@ import * as agreement_agent from './agreement_agent';
 import * as erp_agent from './erp_agent';
 
 import { checkPrerequisites } from '../../validation/prerequisiteGuard';
+import { redactForObservability } from '../../observability/redaction';
 
 async function noopWorker(
   context: WorkerContext
@@ -30,7 +31,7 @@ async function noopWorker(
     console.log('[VALIDATING DEBUG] prerequisite result:', prerequisiteCheck.passed);
     console.log('[VALIDATING DEBUG] incorporation fields:', {
       companyNameMatch: context.extractedFields?.companyNameMatch,
-      incorporationCompanyName: context.extractedFields?.incorporationCompanyName
+      incorporationCompanyName: redactForObservability(context.extractedFields?.incorporationCompanyName)
     });
 
     if (!prerequisiteCheck.passed) {

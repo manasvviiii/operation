@@ -1,4 +1,6 @@
 import { WorkerContext, WorkerResult } from './types';
+import { prisma } from '../../prisma';
+import { redactForObservability } from '../../observability/redaction';
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
@@ -85,7 +87,7 @@ export async function run(
 
   console.log('[PAN AGENT DEBUG] messages:', context.messages.length);
   const latestUserMessage = getLatestUserMessage(context.messages);
-  console.log('[PAN AGENT DEBUG] selected message:', latestUserMessage);
+  console.log('[PAN AGENT DEBUG] selected message:', redactForObservability(latestUserMessage));
 
   if (!latestUserMessage) {
     return {
@@ -98,7 +100,7 @@ export async function run(
   }
 
   const panNumber = extractPan(latestUserMessage);
-  console.log('[PAN AGENT DEBUG] extracted PAN:', panNumber);
+  console.log('[PAN AGENT DEBUG] extracted PAN:', redactForObservability(panNumber));
 
   if (!panNumber) {
     return {

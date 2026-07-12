@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
+import { redactForObservability } from './redaction';
 
 export type AppendAgentEventParams = {
   workflowId: string;
@@ -15,6 +16,10 @@ export type AppendAgentEventParams = {
   status: string;
   latencyMs?: number | null;
   error?: string | null;
+  attemptNumber?: number | null;
+  maxAttempts?: number | null;
+  backoffMs?: number | null;
+  taxonomy?: string | null;
 };
 
 export async function appendAgentEvent(data: AppendAgentEventParams): Promise<void> {
@@ -41,14 +46,18 @@ export async function appendAgentEvent(data: AppendAgentEventParams): Promise<vo
             agentName: data.agentName ?? null,
             workerName: data.workerName ?? null,
             toolName: data.toolName ?? null,
-            input: data.input ? (data.input as Prisma.InputJsonValue) : Prisma.JsonNull,
-            output: data.output ? (data.output as Prisma.InputJsonValue) : Prisma.JsonNull,
-            reasoningSummary: data.reasoningSummary ?? null,
+            input: data.input ? (redactForObservability(data.input) as Prisma.InputJsonValue) : Prisma.JsonNull,
+            output: data.output ? (redactForObservability(data.output) as Prisma.InputJsonValue) : Prisma.JsonNull,
             stateBefore: data.stateBefore ?? null,
             stateAfter: data.stateAfter ?? null,
+            reasoningSummary: data.reasoningSummary ?? null,
             status: data.status,
             latencyMs: data.latencyMs ?? null,
-            error: data.error ?? null,
+            error: data.error ? (redactForObservability(data.error) as string) : null,
+            attemptNumber: data.attemptNumber ?? null,
+            maxAttempts: data.maxAttempts ?? null,
+            backoffMs: data.backoffMs ?? null,
+            taxonomy: data.taxonomy ?? null,
           },
         });
       });

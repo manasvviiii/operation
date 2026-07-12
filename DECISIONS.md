@@ -76,3 +76,11 @@ The `agreement_agent` requires deterministic signature evidence before accepting
 ## Why VENDOR_AGREEMENT Is a Hard Prerequisite
 
 The `prerequisiteGuard` requires a verified `VENDOR_AGREEMENT` document (with `verified === true` and `category === 'VENDOR_AGREEMENT'`) before allowing transitions to `VALIDATING` or `PENDING_APPROVAL`. This joins the existing GST, PAN, BANK_PROOF, and INCORPORATION_PROOF prerequisites. Plain text or extractedFields alone cannot satisfy this check. Human approval via the dashboard remains mandatory — the Telegram bot cannot approve the vendor itself, and `PENDING_APPROVAL` can only be exited through the approval API route.
+
+## R14: Centralized Observability Redaction Boundary
+
+**Date:** July 2026
+
+**Context:** The PRD requires all sensitive fields (GSTIN, PAN, bank accounts, auth tokens, etc.) to be redacted from orchestration logs, the dashboard timeline, and console outputs to prevent PII and secret leaks.
+
+**Decision:** We implemented edactForObservability(value) as a centralized recursive masking utility. This is hooked directly into ppendAgentEvent and console log boundaries in workers, ensuring that even if raw values are extracted by agents, they are scrubbed before persistence in the timeline log. This allows for safe debugging without leaking secrets. We opted for targeted regex scrubbing over wholesale omission to retain context for developers.

@@ -1,7 +1,17 @@
-export interface ConnectorRequest {
-  operation: string;
-  payload: Record<string, unknown>;
-  idempotencyKey?: string;
+export interface NormalizedOutboundMessage {
+  channelId: string;
+  text: string;
+  workflowId?: string;
+}
+
+export interface NormalizedInboundEvent {
+  connectorId: string;
+  channelId: string;
+  senderId?: string;
+  body: string;
+  externalMessageId?: string;
+  ts: Date;
+  workflowId?: string;
 }
 
 export interface ConnectorResponse {
@@ -11,6 +21,9 @@ export interface ConnectorResponse {
 }
 
 export interface Connector {
-  name: string;
-  execute(request: ConnectorRequest): Promise<ConnectorResponse>;
+  id: string;
+  kind: string;
+  sendMessage(input: NormalizedOutboundMessage): Promise<ConnectorResponse>;
+  handleInbound?(input: unknown): Promise<NormalizedInboundEvent | null>;
+  downloadAttachment?(attachmentId: string): Promise<{ data: Buffer; mime: string }>;
 }

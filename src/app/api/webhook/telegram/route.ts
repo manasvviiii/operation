@@ -4,7 +4,7 @@ import { handleInboundUpdate } from '@/lib/inboundHandler';
 export async function POST(req: Request) {
   try {
     const update = await req.json();
-    await handleInboundUpdate(update);
+    await handleInboundUpdate('telegram', update);
   } catch (error) {
     console.error('Webhook Error:', error);
   }

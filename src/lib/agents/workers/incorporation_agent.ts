@@ -1,5 +1,6 @@
 import { extractDocumentText } from '../../document/textExtraction';
 import { updateDocumentValidation } from '../../document/ingestion';
+import { redactForObservability } from '../../observability/redaction';
 import {
   WorkerContext,
   WorkerDocument,
@@ -385,7 +386,7 @@ export async function run(
   console.log('[INCORPORATION DEBUG] document id:', document.id);
   console.log('[INCORPORATION DEBUG] extraction method:', (extractionResult as any).method || 'vision');
   console.log('[INCORPORATION DEBUG] extraction readable:', extractionResult.readable);
-  console.log('[INCORPORATION DEBUG] extracted text:', extractionResult.text);
+  console.log('[INCORPORATION DEBUG] extracted text:', redactForObservability(extractionResult.text));
   console.log('[INCORPORATION DEBUG] GST company name:', gstCompanyName);
   console.log('[INCORPORATION DEBUG] extracted incorporation company name:', incorporationCompanyName);
 

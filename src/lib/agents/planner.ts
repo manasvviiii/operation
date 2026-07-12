@@ -1,7 +1,8 @@
 import Groq from 'groq-sdk';
 import { z } from 'zod';
-import { withRetry } from '../retry';
+import { withRetry, RetryEvent } from '../retry';
 import { validateTransition, type WorkflowState } from '../stateMachine';
+import { appendAgentEvent } from '../observability/agentTimeline';
 
 export interface Plan {
   nextWorker: string;
@@ -116,6 +117,22 @@ export async function planNext(context: PlanContext): Promise<{ plan: Plan; toke
         {
           maxAttempts: 4,
           baseDelayMs: 300,
+          context: {
+            workflowId: context.workflow.id,
+          },
+          onRetryEvent: (event: RetryEvent) => {
+            appendAgentEvent({
+              workflowId: context.workflow.id,
+              eventType: event.eventType,
+              agentName: 'planner',
+              status: event.eventType === 'retry_succeeded' ? 'success' : 'failed',
+              attemptNumber: event.attemptNumber,
+              maxAttempts: event.maxAttempts,
+              backoffMs: event.backoffMs,
+              taxonomy: event.taxonomy,
+              error: event.error,
+            }).catch((err) => console.error('[planner] failed to append retry event:', err));
+          },
           onRetry: (retryAttempt, err) => console.warn(`[planner] Groq call retry ${retryAttempt}:`, err),
         }
       );
