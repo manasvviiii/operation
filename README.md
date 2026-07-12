@@ -1,8 +1,8 @@
 # Operations OS --- AI Vendor Onboarding
 
-Operations OS is a guided vendor onboarding system that combines a
-Telegram assistant, deterministic document validation, human approval,
-and ERP-style vendor creation.
+Operations OS is a hybrid AI vendor-onboarding orchestration system that combines a
+Telegram assistant, structured LLM planning, deterministic state-machine authority, 
+document validation, human approval, and idempotent ERP-style vendor creation.
 
 The workflow collects and validates vendor documents step by step,
 prevents skipped prerequisites, routes completed packets to a human
@@ -11,14 +11,25 @@ approval dashboard, and generates a vendor code only after approval.
 ## Features
 
 -   Telegram-based guided vendor onboarding
--   Sequential state-machine workflow
+-   Structured LLM planner
+-   Specialized worker dispatch
+-   Deterministic state-machine authority
+-   Bounded failure-aware replanning (MAX_REPLANS = 1)
+-   FailureContext injection
+-   Append-only AgentEvent timeline
+-   Retry lifecycle observability and failure taxonomy
+-   Connector abstraction and registry
+-   Telegram inbound idempotency
+-   Telegram outbound idempotency
+-   Approval traceability
+-   Connector lifecycle telemetry
+-   Centralized observability redaction
 -   GST certificate upload and GSTIN validation
 -   PAN format and document validation
 -   Bank proof validation with IFSC and account details extraction
 -   Company incorporation proof validation
 -   GST and incorporation company-name consistency checks
--   Signed Vendor Agreement classification and signature evidence
-    detection
+-   Signed Vendor Agreement classification and signature evidence detection
 -   PDF text extraction and image OCR
 -   Vercel Blob document storage
 -   MIME type and file-size validation
@@ -28,7 +39,6 @@ approval dashboard, and generates a vendor code only after approval.
 -   Deterministic prerequisite guards
 -   Human-only dashboard approval
 -   Idempotent ERP/vendor creation
--   Retry-safe vendor code generation
 -   Telegram status notifications
 -   COMPLETED terminal-state protection
 -   Audit logs, executions, and agent-run persistence
@@ -228,29 +238,24 @@ Vendor onboarding complete. Your vendor code is <VENDOR_CODE>. Welcome aboard.
 ``` text
 Telegram
    ↓
+Connector Registry
+   ↓
 Inbound Handler
    ↓
-Message + Attachment Persistence
+Inbound Idempotency Claim (update_id)
    ↓
-Document Ingestion
-   ├── MIME / size validation
-   ├── SHA-256 checksum
-   └── Vercel Blob storage
-   ↓
-Agent Loop
+runAgentLoop
    ├── Terminal-state guards
    ├── Planner
-   ├── Worker Registry
-   ├── Validation hard gate
+   ├── Structured Plan Validation
+   ├── Worker Dispatch
+   ├── WorkerResult
+   ├── Technical/Business Validation Gates
+   ├── Bounded Replan on Operational Failure
    ├── Prerequisite Guard
-   └── State Machine
+   └── Deterministic State Machine
    ↓
-Document Workers
-   ├── GST Agent
-   ├── PAN Agent
-   ├── Bank Agent
-   ├── Incorporation Agent
-   └── Agreement Agent
+Document Workers / Specialized Agents
    ↓
 Human Approval
    ↓
@@ -258,6 +263,36 @@ ERP Agent
    ↓
 COMPLETED
 ```
+
+*(AgentEvent / Agent Timeline functions as a parallel observability stream tracking the entire lifecycle)*
+
+## Failure Recovery and Replanning
+
+Operations OS supports bounded failure-aware replanning. 
+- If a worker fails operationally (e.g., technical exception, network error), it may trigger replanning.
+- The failure context is captured in a structured `FailureContext` object, categorized by a failure taxonomy, and redacted for observability.
+- A `REPLAN_REQUESTED` event is emitted.
+- Replanning is strictly bounded to `MAX_REPLANS = 1` to prevent infinite loops.
+- The corrected plan goes through the exact same routing and validation gates.
+- **Important:** Business validation failures (e.g., "blurrry document", "mismatched GSTIN") do NOT trigger replanning. They pause the workflow and request correction from the user directly.
+
+## Idempotency
+
+Operations OS enforces strict idempotency for both inbound webhooks and outbound messaging:
+- **Inbound Claim:** Incoming Telegram `update_id`s are claimed using a PostgreSQL/Prisma unique constraint.
+- **P2002 Suppression:** If a concurrent duplicate webhook arrives, the duplicate is suppressed safely using Prisma's `P2002` error code. The loser always yields.
+- **Outbound Semantics:** Outbound messages use stable, semantic idempotency keys (e.g., `outbound:<workflowId>:<executionId>:validation_failed`).
+- **Claim Before HTTP:** Outbound claims are recorded in the database *before* making the Telegram HTTP request to prevent race conditions. Same-owner HTTP retries occur naturally after claiming ownership.
+- **Limitation:** Abandoned outbound claims (e.g., where the application crashes after claiming but before sending) currently lack a lease-recovery mechanism.
+
+## Agent Timeline and Observability
+
+The Agent Timeline is an append-only stream of `AgentEvent`s tracking the orchestration lifecycle.
+- **Event Vocabulary:** Canonical events include `LOOP_STARTED`, `PLAN_CREATED`, `WORKER_DISPATCHED`, `WORKER_RESULT`, `REPLAN_REQUESTED`, `RETRY_SCHEDULED`, `VALIDATION_FAILED`, `VALIDATION_PASSED`, `STATE_TRANSITION`, `EXECUTION_COMPLETED`, and `EXECUTION_FAILED`.
+- **Worker Failure:** A worker operational failure is canonically represented by `WORKER_RESULT` with `status='failed'`.
+- **Token Usage:** Token usage metadata is persisted whenever supplied by the LLM planner. 
+- **Cost:** `estimatedCost` remains explicitly `null` unless a dedicated pricing registry exists; no prices are silently hardcoded or guessed.
+- **Observability Redaction:** All sensitive fields (e.g., API keys, PAN numbers, bank details) are scrubbed at the logging boundary using centralized observability redaction to prevent secret leaks, utilizing explicit-key and semantic scrubbing rather than simple long-string heuristics.
 
 ## Tech Stack
 
@@ -272,9 +307,6 @@ COMPLETED
 -   pdf-parse
 -   Zod
 -   Vitest
--   OpenAI SDK
--   Anthropic SDK
--   Google Generative AI SDK
 -   Groq SDK
 
 ## Project Structure
@@ -403,10 +435,10 @@ Run the production build:
 npm run build
 ```
 
-Current verified project baseline after Phase 7:
+Current verified project baseline:
 
 ``` text
-183 tests passed
+253 tests passed
 0 tests failed
 TypeScript: 0 errors
 Production build: successful

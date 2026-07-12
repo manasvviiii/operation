@@ -37,11 +37,17 @@ When a workflow reaches `COMPLETED`, `runAgentLoop` intercepts the execution at 
 
 ## What Was Stubbed or Deferred
 
-The **planner agent** is a real, working LLM integration — it receives workflow context and returns a structured plan validated by Zod, and has been verified end-to-end against the live database (a seeded workflow correctly transitioned from `INITIATED` to `AWAITING_GST` based on the planner's live output). The planner went through two provider swaps during the build window due to credit/quota constraints: it was first built against Anthropic's Claude SDK (`@anthropic-ai/sdk` is still in `package.json`, unused), then switched to Google's Gemini 2.0 Flash (blocked by a zero-quota free tier limit), and finally switched to **Groq** (`llama-3.3-70b-versatile`), which is the current, working implementation. The Groq call is wrapped in `withRetry` with up to 4 attempts and exponential backoff starting at 300ms, so transient API failures and rate-limit errors are retried automatically before the execution is marked as failed. The **five worker agents** (`doc_agent`, `gst_agent`, `pan_agent`, `bank_agent`, `erp_agent`) are now implemented as mock workers dispatched by `runAgentLoop.ts`. They extract data via regex (GST, PAN, IFSC), acknowledge document uploads, and simulate ERP writes. They do not call real external APIs — this was a deliberate scope cut prioritizing the orchestration skeleton, LLM integration, and observability infrastructure over real external service integrations.
+The **planner agent** is a real, working LLM integration — it receives workflow context and returns a structured plan validated by Zod. **Groq** (`llama-3.3-70b-versatile`) is the current planner provider. The Groq call is wrapped in `withRetry` with up to 4 attempts and exponential backoff, automatically handling transient API failures.
 
-The four info-collection workers (`doc_agent`, `gst_agent`, `pan_agent`, `bank_agent`) currently always return `success: true` regardless of whether they extracted valid data — a missing or invalid GST or PAN triggers a re-prompt message but does not block the state transition. The planner's own judgment is what currently paces progression through the collection states; the workers are not yet a hard validation gate. This is a deliberate scope cut, not a bug, but should be treated as one for production hardening.
+The **five specialized workers** (`doc_agent`, `gst_agent`, `pan_agent`, `bank_agent`, `erp_agent`) are real agents performing deterministic validation and data extraction via regex and algorithmic checks (e.g., GSTIN formats, IFSC codes). They are not merely mock workers. A missing or invalid GST, PAN, or bank document triggers a hard business validation failure, blocking state progression and sending a correction prompt to the user.
 
-`PAUSED` (used for rejected approvals) is a terminal-ish state in the current state machine — it can only transition to `FAILED` or `CANCELLED`, with no path back into the normal onboarding flow. A rejected vendor currently requires manual/out-of-band handling to resubmit. The rejection decision does send the vendor a Telegram message explaining the reason and noting that the workflow is paused pending manual follow-up, so they are not left with silence, but resubmission itself is not automated.
+However, the following honest limitations remain deferred for production:
+- The `erp_agent` simulates an ERP integration by creating an internal database record; it does not call a real enterprise SAP/Oracle API.
+- External government GST/PAN verification APIs and penny-drop bank account verification APIs are not integrated.
+- Rejected `PAUSED` workflows require manual/out-of-band follow-up; resubmission paths are not yet automated.
+- Abandoned outbound idempotency claims (e.g., if the process crashes after claiming but before HTTP dispatch) currently lack lease recovery.
+- The workflow-level replan budget (`MAX_REPLANS = 1`) does not persist across independent `runAgentLoop` webhook invocations.
+- Core sensitive persistence is scrubbed in logs/timelines but is not application-layer encrypted at rest in the PostgreSQL database.
 
 ## What Would Change for Production
 
@@ -83,4 +89,36 @@ The `prerequisiteGuard` requires a verified `VENDOR_AGREEMENT` document (with `v
 
 **Context:** The PRD requires all sensitive fields (GSTIN, PAN, bank accounts, auth tokens, etc.) to be redacted from orchestration logs, the dashboard timeline, and console outputs to prevent PII and secret leaks.
 
-**Decision:** We implemented edactForObservability(value) as a centralized recursive masking utility. This is hooked directly into ppendAgentEvent and console log boundaries in workers, ensuring that even if raw values are extracted by agents, they are scrubbed before persistence in the timeline log. This allows for safe debugging without leaking secrets. We opted for targeted regex scrubbing over wholesale omission to retain context for developers.
+**Decision:** We implemented `redactForObservability(value)` as a centralized recursive masking utility. This is hooked directly into `appendAgentEvent` and console log boundaries in workers, ensuring that even if raw values are extracted by agents, they are scrubbed before persistence in the timeline log. This allows for safe debugging without leaking secrets. We opted for targeted regex scrubbing over wholesale omission to retain context for developers.
+
+## Why Explicit-Key Document Content Redaction
+
+We explicitly identify keys containing raw document text for deep redaction rather than relying on a naive heuristic like "redact all strings longer than 200 characters", which previously obfuscated legitimate error messages and planner reasoning summaries.
+
+## Why Retry vs Replanning Are Separated
+
+The workflow handles temporary network or rate-limiting errors differently from hard operational failures. `withRetry` wraps LLM provider calls and external HTTP connectors, swallowing transient errors locally up to a retry limit. In contrast, Bounded Replanning only activates when a worker definitively fails (exhausting its own retries or throwing an unrecoverable exception). This ensures we do not consume AI tokens merely to retry a `502 Bad Gateway`.
+
+## Why Bounded Replanning with MAX_REPLANS = 1
+
+When an operational failure triggers a replan, `MAX_REPLANS = 1` enforces a strict upper limit. The LLM is given exactly one chance to propose a recovery path. If the second attempt fails, the execution terminates. This prevents infinite AI hallucination loops.
+
+## Why a Structured FailureContext is Passed to the Planner
+
+Failures are aggregated into a `FailureContext` structure. This gives the planner structured visibility into the `failedWorker`, `failureClass`, and `errorSummary`, so it can make an intelligent recovery decision instead of blindly repeating the same action.
+
+## Why Canonical WORKER_RESULT(status='failed') is Used
+
+We did not add a new `WORKER_FAILED` event. The Agent Timeline explicitly uses `WORKER_RESULT` with `status='failed'` to represent operational worker failure. This ensures a unified vocabulary and avoids duplicate timeline metadata.
+
+## Why Database-Backed Inbound/Outbound Idempotency Claims
+
+We use a database-backed idempotency claim architecture (Prisma/PostgreSQL) instead of relying on a memory cache or Redis. The Telegram `update_id` acts as the inbound unique constraint, and outbound messages use stable semantic keys (e.g., `outbound:<workflowId>:<executionId>:worker_error`). Outbound claims are recorded *before* the Telegram HTTP request is made to prevent concurrent network dispatches.
+
+## Why the P2002 Loser-Always-Yields Ownership Rule
+
+During concurrent webhook processing, we rely on the PostgreSQL/Prisma `P2002` (Unique Constraint Violation) error. Whichever process hits `P2002` immediately yields and aborts. The winner owns the execution.
+
+## Why estimatedCost Remains Null
+
+The timeline metadata stores token usage directly from the Groq SDK, but leaves `estimatedCost` as `null` since there is no central pricing registry configured. Hardcoding static prices inside the planner is strictly prohibited.
